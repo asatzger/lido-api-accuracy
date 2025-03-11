@@ -138,6 +138,47 @@ def get_withdrawal_history(withdrawal_id):
     
     return all_items
 
+def get_highest_calculated_request():
+    """Get the highest request ID with status 'calculated' at the latest timestamp"""
+    table = dynamodb.Table(TABLE_NAME)
+    calculated_entries = []
+    last_evaluated_key = None
+    
+    while True:
+        scan_kwargs = {
+            'FilterExpression': '#status = :status',
+            'ExpressionAttributeNames': {
+                '#status': 'status'
+            },
+            'ExpressionAttributeValues': {
+                ':status': 'calculated'
+            },
+            'Limit': 1000
+        }
+        if last_evaluated_key:
+            scan_kwargs['ExclusiveStartKey'] = last_evaluated_key
+            
+        response = table.scan(**scan_kwargs)
+        calculated_entries.extend(response['Items'])
+        
+        last_evaluated_key = response.get('LastEvaluatedKey')
+        if not last_evaluated_key:
+            break
+    
+    if not calculated_entries:
+        return None
+        
+    # Sort by timestamp (descending) to get the latest entries
+    calculated_entries.sort(key=lambda x: x['timestamp'], reverse=True)
+    latest_timestamp = calculated_entries[0]['timestamp']
+    
+    # Filter entries with the latest timestamp
+    latest_entries = [entry for entry in calculated_entries if entry['timestamp'] == latest_timestamp]
+    
+    # Find the highest request ID among the latest entries
+    highest_request = max(latest_entries, key=lambda x: int(x['withdrawal_id']))
+    return highest_request
+
 def main():
     print(f"\n=== DynamoDB Table State for {TABLE_NAME} ===\n")
     
@@ -156,6 +197,15 @@ def main():
     for req_type, count in stats['type_distribution'].items():
         print(f"  {req_type}: {count}")
     
+    # Get and display highest calculated request
+    highest_calculated = get_highest_calculated_request()
+    if highest_calculated:
+        print("\nHighest Calculated Request at Latest Timestamp:")
+        print(f"Withdrawal ID: {highest_calculated['withdrawal_id']}")
+        print(f"Timestamp: {highest_calculated['timestamp']}")
+    else:
+        print("\nNo calculated requests found")
+
     # Get and display latest entries
     print("\nLatest Entries (showing history):")
     latest = get_latest_entries(5)
