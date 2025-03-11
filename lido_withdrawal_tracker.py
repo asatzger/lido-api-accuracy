@@ -96,6 +96,7 @@ def fetch_single_batch(batch_ids, table):
     non_finalized_found = False
     lowest_non_finalized_id = None
     max_retries = 3
+    calculating_found = False  # New flag to track calculating status
     
     retry_count = 0
     while retry_count < max_retries:
@@ -109,13 +110,13 @@ def fetch_single_batch(batch_ids, table):
                 if retry_count < max_retries:
                     time.sleep(2 ** retry_count)
                     continue
-                return [], None
+                return [], None, False
             
             data = response.json()
             
             if not data:
                 print(f"No data received for IDs {batch_ids[0]}-{batch_ids[-1]}")
-                return [], None
+                return [], None, False
             
             # Process each result
             if isinstance(data, list):
@@ -124,6 +125,10 @@ def fetch_single_batch(batch_ids, table):
                     id_val = batch_ids[idx]
                     if result is None:
                         continue
+                    
+                    # Check if status is calculating
+                    if result.get('status') == 'calculating':
+                        calculating_found = True
                     
                     # Check if we already have this record
                     try:
@@ -160,7 +165,7 @@ def fetch_single_batch(batch_ids, table):
                         if lowest_non_finalized_id is None or id_val < lowest_non_finalized_id:
                             lowest_non_finalized_id = id_val
             
-            return results, lowest_non_finalized_id
+            return results, lowest_non_finalized_id, calculating_found
             
         except Exception as e:
             print(f"Error processing batch {batch_ids[0]}-{batch_ids[-1]}: {e}")
@@ -168,33 +173,30 @@ def fetch_single_batch(batch_ids, table):
             if retry_count < max_retries:
                 time.sleep(2 ** retry_count)
             else:
-                return [], None
+                return [], None, False
     
-    return [], None
+    return [], None, False
 
 def fetch_withdrawal_data(start_id, table):
     """Fetch withdrawal data from the API using multiple threads"""
     all_results = []
     lowest_non_finalized_id = None
     max_concurrent_batches = 2
-    consecutive_empty_batches = 0
-    max_empty_batches = 3
     current_id = start_id
     
     print(f"\nStarting data collection from ID {start_id} (upper bound: {MAX_REQUEST_ID})")
     batch_summaries = []
     
     with ThreadPoolExecutor(max_workers=max_concurrent_batches) as executor:
-        while consecutive_empty_batches < max_empty_batches and current_id < MAX_REQUEST_ID:  # Add upper bound check
+        while current_id < MAX_REQUEST_ID:
             batch_start_id = current_id
             batch_futures = []
             
             # Prepare multiple batches
             for _ in range(max_concurrent_batches):
-                if current_id >= MAX_REQUEST_ID:  # Check before creating new batch
+                if current_id >= MAX_REQUEST_ID:
                     break
                 
-                # Ensure we don't exceed MAX_REQUEST_ID within a batch
                 end_id = min(current_id + BATCH_SIZE, MAX_REQUEST_ID)
                 batch_ids = list(range(current_id, end_id))
                 
@@ -203,20 +205,20 @@ def fetch_withdrawal_data(start_id, table):
                 current_id += BATCH_SIZE
                 time.sleep(1)
             
-            if not batch_futures:  # No more batches to process
+            if not batch_futures:
                 break
             
             # Process completed batches
-            empty_batch_count = 0  # Count empty batches in this set
             batch_results = 0
+            calculating_status_found = False
             
             for start_id, future in batch_futures:
                 try:
-                    results, batch_lowest_non_finalized = future.result()
-                    if not results:  # This batch was empty
-                        empty_batch_count += 1
-                        print(f"Empty batch {start_id}-{start_id + BATCH_SIZE - 1}")
-                    else:
+                    results, batch_lowest_non_finalized, calculating_found = future.result()
+                    if calculating_found:
+                        calculating_status_found = True
+                    
+                    if results:
                         batch_results += len(results)
                         all_results.extend(results)
                         print(f"Batch {start_id}-{start_id + BATCH_SIZE - 1}: {len(results)} results")
@@ -224,10 +226,11 @@ def fetch_withdrawal_data(start_id, table):
                         if batch_lowest_non_finalized:
                             if lowest_non_finalized_id is None or batch_lowest_non_finalized < lowest_non_finalized_id:
                                 lowest_non_finalized_id = batch_lowest_non_finalized
+                    else:
+                        print(f"Empty batch {start_id}-{start_id + BATCH_SIZE - 1}")
                 
                 except Exception as e:
                     print(f"Error in batch {start_id}-{start_id + BATCH_SIZE - 1}: {e}")
-                    empty_batch_count += 1
             
             # Record batch summary
             batch_summaries.append({
@@ -235,12 +238,10 @@ def fetch_withdrawal_data(start_id, table):
                 'results': batch_results
             })
             
-            # Update consecutive empty batches counter
-            if empty_batch_count == max_concurrent_batches:  # All batches in this set were empty
-                consecutive_empty_batches += 1
-                print(f"All batches empty ({consecutive_empty_batches}/{max_empty_batches})")
-            else:
-                consecutive_empty_batches = 0  # Reset if we got any results
+            # Stop if calculating status was found
+            if calculating_status_found:
+                print("Found calculating status - stopping further processing")
+                break
             
             time.sleep(2)
     
