@@ -322,6 +322,41 @@ def analyze_accuracy_over_time(df):
     
     return accuracy_over_time
 
+def analyze_individual_estimates(df):
+    """
+    Analyze how finalization time estimates change over time for individual withdrawals.
+    This function tracks the progression of estimates for each withdrawal_id.
+    """
+    # Create a subset of data with just the needed columns
+    tracking_df = df[['withdrawal_id', 'time_of_estimate', 'estimated_time', 'actual_time']].copy()
+    
+    # Sort by withdrawal_id and time of estimate
+    tracking_df = tracking_df.sort_values(['withdrawal_id', 'time_of_estimate'])
+    
+    # Get the top 5 withdrawal IDs with most estimates for a more readable chart
+    top_withdrawals = (df['withdrawal_id']
+                      .value_counts()
+                      .head(5)
+                      .index
+                      .tolist())
+    
+    # Filter to just these withdrawals
+    top_tracking_df = tracking_df[tracking_df['withdrawal_id'].isin(top_withdrawals)]
+    
+    # Calculate hours until estimated finalization from each estimate point
+    top_tracking_df['hours_until_estimated'] = (
+        (top_tracking_df['estimated_time'] - top_tracking_df['time_of_estimate'])
+        .dt.total_seconds() / 3600
+    )
+    
+    # Calculate hours until actual finalization from each estimate point
+    top_tracking_df['hours_until_actual'] = (
+        (top_tracking_df['actual_time'] - top_tracking_df['time_of_estimate'])
+        .dt.total_seconds() / 3600
+    )
+    
+    return top_tracking_df
+
 def generate_altair_visualizations(df):
     """Generate Altair visualizations from the analysis data"""
     visualizations = {}
@@ -461,6 +496,76 @@ def generate_altair_visualizations(df):
         height=400
     )
     visualizations['accuracy_over_time'] = accuracy_line
+    
+    # 7. NEW: Individual withdrawal estimates over time
+    top_tracking_df = analyze_individual_estimates(df)  # Use original df for analysis
+    
+    # Convert datetimes to string for visualization
+    individual_tracking = top_tracking_df.copy()
+    individual_tracking['time_of_estimate'] = individual_tracking['time_of_estimate'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    individual_tracking['withdrawal_id'] = individual_tracking['withdrawal_id'].astype(str)
+    individual_tracking['hours_until_estimated'] = individual_tracking['hours_until_estimated'].astype(float)
+    individual_tracking['hours_until_actual'] = individual_tracking['hours_until_actual'].astype(float)
+    
+    # Create a selection for the withdrawal ID
+    withdrawal_selection = alt.selection_point(fields=['withdrawal_id'], bind='legend')
+    
+    # Create a line chart showing how estimates changed for individual withdrawals
+    estimates_line = alt.Chart(individual_tracking).mark_line().encode(
+        x=alt.X('time_of_estimate:T', title='Time of Estimate'),
+        y=alt.Y('hours_until_estimated:Q', title='Hours Until Estimated Finalization'),
+        color=alt.Color('withdrawal_id:N', title='Withdrawal ID'),
+        opacity=alt.condition(withdrawal_selection, alt.value(1), alt.value(0.2)),
+        tooltip=['withdrawal_id', 'time_of_estimate', 'hours_until_estimated:Q', 'hours_until_actual:Q']
+    ).properties(
+        title='Individual Withdrawal Estimates Over Time',
+        width=800,
+        height=500
+    ).add_params(
+        withdrawal_selection
+    )
+    
+    # Add reference lines for actual finalization times
+    actual_finalization_refs = []
+    
+    for withdrawal_id in top_tracking_df['withdrawal_id'].unique():
+        # Get the actual finalization time (same for all rows with this withdrawal_id)
+        actual_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['actual_time'].iloc[0]
+        
+        # Get the earliest estimate time for this withdrawal
+        min_estimate_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['time_of_estimate'].min()
+        
+        # Get the latest estimate time for this withdrawal
+        max_estimate_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['time_of_estimate'].max()
+        
+        # Calculate average hours until actual across all estimates for this withdrawal
+        avg_hours_until_actual = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['hours_until_actual'].mean()
+        
+        # Only add reference if we have valid times
+        if pd.notna(actual_time) and pd.notna(min_estimate_time) and pd.notna(max_estimate_time):
+            # Create a reference DataFrame for this withdrawal
+            ref_df = pd.DataFrame({
+                'withdrawal_id': [str(withdrawal_id), str(withdrawal_id)],
+                'time_of_estimate': [min_estimate_time.strftime('%Y-%m-%d %H:%M:%S'), 
+                                   max_estimate_time.strftime('%Y-%m-%d %H:%M:%S')],
+                'hours_until_actual': [avg_hours_until_actual, avg_hours_until_actual]
+            })
+            
+            # Create a reference line
+            ref_line = alt.Chart(ref_df).mark_line(strokeDash=[6, 4], strokeWidth=2).encode(
+                x='time_of_estimate:T',
+                y='hours_until_actual:Q',
+                color=alt.Color('withdrawal_id:N', title='Withdrawal ID'),
+                opacity=alt.condition(withdrawal_selection, alt.value(0.7), alt.value(0.1))
+            )
+            
+            actual_finalization_refs.append(ref_line)
+    
+    # Combine main chart with all reference lines
+    for ref_line in actual_finalization_refs:
+        estimates_line += ref_line
+    
+    visualizations['individual_estimates'] = estimates_line
     
     return visualizations
 
