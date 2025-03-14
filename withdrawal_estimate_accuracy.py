@@ -279,27 +279,31 @@ def analyze_time_of_day(df):
     return hourly_stats
 
 def analyze_batch_processing(df):
-    """Analyze batch processing patterns"""
-    # Group withdrawals by date and hour of finalization
-    df['finalization_date'] = df['actual_time'].dt.date
-    df['finalization_hour'] = df['actual_time'].dt.hour
+    """
+    Analyze daily processing patterns of unique withdrawals
+    Track how many unique withdrawals are processed each day
+    """
+    # Use actual finalization time to determine processing day
+    df['processing_date'] = df['actual_time'].dt.date
     
-    # Count withdrawals per hour for each date
-    batch_counts = df.groupby(['finalization_date', 'finalization_hour']).agg({
-        'withdrawal_id': 'count',
-        'error_hours': ['mean', 'median']
+    # Group by processing date and count unique withdrawal_ids
+    daily_withdrawals = df.groupby('processing_date').agg({
+        'withdrawal_id': pd.Series.nunique,  # Count unique withdrawals per day
+        'withdrawal_type': 'first'  # Just to keep track of types
     }).reset_index()
     
-    batch_counts.columns = ['date', 'hour', 'count', 'mean_error', 'median_error']
+    daily_withdrawals.columns = ['processing_date', 'unique_withdrawals', 'example_type']
     
-    # Calculate batch size statistics
-    batch_stats = batch_counts.groupby('hour').agg({
-        'count': ['mean', 'median', 'std', 'min', 'max']
-    }).reset_index()
+    # Calculate statistics about daily processing
+    stats = {
+        'mean_daily_withdrawals': daily_withdrawals['unique_withdrawals'].mean(),
+        'median_daily_withdrawals': daily_withdrawals['unique_withdrawals'].median(),
+        'max_daily_withdrawals': daily_withdrawals['unique_withdrawals'].max(),
+        'min_daily_withdrawals': daily_withdrawals['unique_withdrawals'].min(),
+        'days_with_processing': len(daily_withdrawals)
+    }
     
-    batch_stats.columns = ['hour', 'mean_batch_size', 'median_batch_size', 'std_batch_size', 'min_batch_size', 'max_batch_size']
-    
-    return batch_counts, batch_stats
+    return daily_withdrawals, stats
 
 def analyze_accuracy_over_time(df):
     """Analyze how estimate accuracy changes as finalization time approaches"""
@@ -357,218 +361,6 @@ def analyze_individual_estimates(df):
     
     return top_tracking_df
 
-def generate_altair_visualizations(df):
-    """Generate Altair visualizations from the analysis data"""
-    visualizations = {}
-    
-    # Create a copy of the DataFrame for visualization
-    df_viz = df.copy()
-    
-    # Ensure numeric columns are float
-    df_viz['error_hours'] = df_viz['error_hours'].astype(float)
-    df_viz['hours_in_advance'] = df_viz['hours_in_advance'].astype(float)
-    df_viz['absolute_error_hours'] = df_viz['absolute_error_hours'].astype(float)
-    df_viz['withdrawal_type'] = df_viz['withdrawal_type'].astype(str)
-    df_viz['withdrawal_id'] = df_viz['withdrawal_id'].astype(str)
-    
-    # 1. Error distribution histogram
-    error_hist = alt.Chart(df_viz).mark_bar().encode(
-        alt.X('error_hours:Q', bin=alt.Bin(maxbins=50), title='Error (Actual - Estimated) in Hours'),
-        alt.Y('count()', title='Frequency'),
-        tooltip=['count()', alt.Tooltip('error_hours:Q', title='Error (hours)')]
-    ).properties(
-        title='Distribution of Estimate Errors (Hours)',
-        width=600,
-        height=400
-    )
-    
-    # Add a rule for perfect estimate (Error = 0)
-    perfect_line = alt.Chart(pd.DataFrame({'x': [0]})).mark_rule(
-        color='red', 
-        strokeDash=[6, 4],
-        strokeWidth=2
-    ).encode(x='x:Q')
-    
-    error_dist_chart = (error_hist + perfect_line)
-    
-    visualizations['error_distribution'] = error_dist_chart
-    
-    # 2. Error vs Estimation Lead Time
-    scatter = alt.Chart(df_viz).mark_circle(opacity=0.7).encode(
-        x=alt.X('hours_in_advance:Q', title='Hours Between Estimate and Estimated Completion'),
-        y=alt.Y('error_hours:Q', title='Error (Actual - Estimated) in Hours'),
-        color=alt.Color('withdrawal_type:N', title='Withdrawal Type'),
-        size=alt.Size('absolute_error_hours:Q', scale=alt.Scale(range=[20, 200]), title='Absolute Error (hours)'),
-        tooltip=['withdrawal_id', 'withdrawal_type', 'error_hours:Q', 'hours_in_advance:Q']
-    ).properties(
-        title='Estimate Error vs. How Far in Advance Estimate Was Made',
-        width=700,
-        height=400
-    )
-    
-    # Add a rule for perfect estimate (Error = 0)
-    zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
-        color='red', 
-        strokeDash=[6, 4],
-        strokeWidth=2
-    ).encode(y='y:Q')
-    
-    error_vs_leadtime_chart = (scatter + zero_line)
-    
-    visualizations['error_vs_leadtime'] = error_vs_leadtime_chart
-    
-    # 3. Error distribution by withdrawal type
-    boxplot = alt.Chart(df_viz).mark_boxplot().encode(
-        x=alt.X('withdrawal_type:N', title='Withdrawal Type'),
-        y=alt.Y('error_hours:Q', title='Error (Hours)'),
-        color=alt.Color('withdrawal_type:N', title='Withdrawal Type')
-    ).properties(
-        title='Estimate Errors by Withdrawal Type',
-        width=600,
-        height=400
-    )
-    
-    visualizations['error_by_type'] = boxplot
-    
-    # 4. Time of day analysis
-    hourly_stats = analyze_time_of_day(df)  # Use original df for analysis
-    hourly_stats = hourly_stats.copy()
-    hourly_stats['hour'] = hourly_stats['hour'].astype(int)
-    hourly_stats['count'] = hourly_stats['count'].astype(int)
-    hourly_stats['mean_error'] = hourly_stats['mean_error'].astype(float)
-    hourly_stats['median_error'] = hourly_stats['median_error'].astype(float)
-    hourly_stats['std_error'] = hourly_stats['std_error'].astype(float)
-    
-    # Create a heatmap of withdrawal counts by hour
-    heatmap = alt.Chart(hourly_stats).mark_rect().encode(
-        x=alt.X('hour:O', title='Hour of Day (UTC)'),
-        y=alt.Y('count:Q', title='Number of Withdrawals'),
-        color=alt.Color('count:Q', title='Count'),
-        tooltip=['hour:O', 'count:Q', 'mean_error:Q', 'median_error:Q']
-    ).properties(
-        title='Withdrawal Processing Time Distribution',
-        width=600,
-        height=400
-    )
-    visualizations['time_of_day'] = heatmap
-    
-    # 5. Batch processing patterns
-    batch_counts, batch_stats = analyze_batch_processing(df)  # Use original df for analysis
-    batch_counts = batch_counts.copy()
-    batch_counts['date'] = batch_counts['date'].astype(str)  # Convert date to string for visualization
-    batch_counts['hour'] = batch_counts['hour'].astype(int)
-    batch_counts['count'] = batch_counts['count'].astype(int)
-    batch_counts['mean_error'] = batch_counts['mean_error'].astype(float)
-    batch_counts['median_error'] = batch_counts['median_error'].astype(float)
-    
-    # Create a line chart showing batch sizes over time
-    batch_line = alt.Chart(batch_counts).mark_line().encode(
-        x=alt.X('date:T', title='Date'),
-        y=alt.Y('count:Q', title='Number of Withdrawals'),
-        color=alt.Color('hour:O', title='Hour of Day'),
-        tooltip=['date:T', 'hour:O', 'count:Q', 'mean_error:Q']
-    ).properties(
-        title='Batch Processing Patterns Over Time',
-        width=800,
-        height=400
-    )
-    visualizations['batch_patterns'] = batch_line
-    
-    # 6. Accuracy over time
-    accuracy_over_time = analyze_accuracy_over_time(df)  # Use original df for analysis
-    accuracy_over_time = accuracy_over_time.copy()
-    accuracy_over_time['time_until'] = accuracy_over_time['time_until'].astype(str)
-    accuracy_over_time['mean_error'] = accuracy_over_time['mean_error'].astype(float)
-    accuracy_over_time['median_error'] = accuracy_over_time['median_error'].astype(float)
-    accuracy_over_time['std_error'] = accuracy_over_time['std_error'].astype(float)
-    accuracy_over_time['count'] = accuracy_over_time['count'].astype(int)
-    accuracy_over_time['mean_abs_error'] = accuracy_over_time['mean_abs_error'].astype(float)
-    accuracy_over_time['median_abs_error'] = accuracy_over_time['median_abs_error'].astype(float)
-    
-    # Create a line chart showing accuracy improvement
-    accuracy_line = alt.Chart(accuracy_over_time).mark_line().encode(
-        x=alt.X('time_until:N', title='Time Until Finalization'),
-        y=alt.Y('mean_abs_error:Q', title='Mean Absolute Error (Hours)'),
-        tooltip=['time_until:N', 'mean_abs_error:Q', 'median_abs_error:Q', 'count:Q']
-    ).properties(
-        title='Estimate Accuracy vs Time Until Finalization',
-        width=600,
-        height=400
-    )
-    visualizations['accuracy_over_time'] = accuracy_line
-    
-    # 7. NEW: Individual withdrawal estimates over time
-    top_tracking_df = analyze_individual_estimates(df)  # Use original df for analysis
-    
-    # Convert datetimes to string for visualization
-    individual_tracking = top_tracking_df.copy()
-    individual_tracking['time_of_estimate'] = individual_tracking['time_of_estimate'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    individual_tracking['withdrawal_id'] = individual_tracking['withdrawal_id'].astype(str)
-    individual_tracking['hours_until_estimated'] = individual_tracking['hours_until_estimated'].astype(float)
-    individual_tracking['hours_until_actual'] = individual_tracking['hours_until_actual'].astype(float)
-    
-    # Create a selection for the withdrawal ID
-    withdrawal_selection = alt.selection_point(fields=['withdrawal_id'], bind='legend')
-    
-    # Create a line chart showing how estimates changed for individual withdrawals
-    estimates_line = alt.Chart(individual_tracking).mark_line().encode(
-        x=alt.X('time_of_estimate:T', title='Time of Estimate'),
-        y=alt.Y('hours_until_estimated:Q', title='Hours Until Estimated Finalization'),
-        color=alt.Color('withdrawal_id:N', title='Withdrawal ID'),
-        opacity=alt.condition(withdrawal_selection, alt.value(1), alt.value(0.2)),
-        tooltip=['withdrawal_id', 'time_of_estimate', 'hours_until_estimated:Q', 'hours_until_actual:Q']
-    ).properties(
-        title='Individual Withdrawal Estimates Over Time',
-        width=800,
-        height=500
-    ).add_params(
-        withdrawal_selection
-    )
-    
-    # Add reference lines for actual finalization times
-    actual_finalization_refs = []
-    
-    for withdrawal_id in top_tracking_df['withdrawal_id'].unique():
-        # Get the actual finalization time (same for all rows with this withdrawal_id)
-        actual_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['actual_time'].iloc[0]
-        
-        # Get the earliest estimate time for this withdrawal
-        min_estimate_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['time_of_estimate'].min()
-        
-        # Get the latest estimate time for this withdrawal
-        max_estimate_time = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['time_of_estimate'].max()
-        
-        # Calculate average hours until actual across all estimates for this withdrawal
-        avg_hours_until_actual = top_tracking_df[top_tracking_df['withdrawal_id'] == withdrawal_id]['hours_until_actual'].mean()
-        
-        # Only add reference if we have valid times
-        if pd.notna(actual_time) and pd.notna(min_estimate_time) and pd.notna(max_estimate_time):
-            # Create a reference DataFrame for this withdrawal
-            ref_df = pd.DataFrame({
-                'withdrawal_id': [str(withdrawal_id), str(withdrawal_id)],
-                'time_of_estimate': [min_estimate_time.strftime('%Y-%m-%d %H:%M:%S'), 
-                                   max_estimate_time.strftime('%Y-%m-%d %H:%M:%S')],
-                'hours_until_actual': [avg_hours_until_actual, avg_hours_until_actual]
-            })
-            
-            # Create a reference line
-            ref_line = alt.Chart(ref_df).mark_line(strokeDash=[6, 4], strokeWidth=2).encode(
-                x='time_of_estimate:T',
-                y='hours_until_actual:Q',
-                color=alt.Color('withdrawal_id:N', title='Withdrawal ID'),
-                opacity=alt.condition(withdrawal_selection, alt.value(0.7), alt.value(0.1))
-            )
-            
-            actual_finalization_refs.append(ref_line)
-    
-    # Combine main chart with all reference lines
-    for ref_line in actual_finalization_refs:
-        estimates_line += ref_line
-    
-    visualizations['individual_estimates'] = estimates_line
-    
-    return visualizations
-
 def calculate_statistics(df):
     """Calculate key statistics about the estimate accuracy"""
     stats = {}
@@ -582,15 +374,27 @@ def calculate_statistics(df):
     stats['mean_absolute_error'] = df['error_hours'].abs().mean()
     stats['median_absolute_error'] = df['error_hours'].abs().median()
     
-    # Error ranges
-    stats['within_1hour'] = (df['error_hours'].abs() <= 1).mean() * 100
-    stats['within_6hours'] = (df['error_hours'].abs() <= 6).mean() * 100
-    stats['within_12hours'] = (df['error_hours'].abs() <= 12).mean() * 100
-    stats['within_24hours'] = (df['error_hours'].abs() <= 24).mean() * 100
+    # Calculate day-based accuracy instead of hour-based
+    # Convert error_hours to days and take absolute value
+    df['error_days'] = df['error_hours'].abs() / 24
     
-    # Direction of error
-    stats['early_estimates'] = (df['error_hours'] > 0).mean() * 100  # Positive error means actual time was later
-    stats['late_estimates'] = (df['error_hours'] < 0).mean() * 100   # Negative error means actual time was earlier
+    # Error ranges by days
+    stats['correct_day'] = (df['error_days'] < 1).mean() * 100  # Less than 1 day difference
+    stats['within_1day'] = (df['error_days'] < 2).mean() * 100  # Less than 2 days difference (i.e., +/- 1 day)
+    stats['within_2days'] = (df['error_days'] < 3).mean() * 100
+    stats['within_3days'] = (df['error_days'] < 4).mean() * 100
+    stats['within_7days'] = (df['error_days'] < 8).mean() * 100
+    
+    # Direction of error - based on all withdrawals
+    # For reporting, we still consider estimates within 1 hour of actual as correct
+    correct_estimates = (df['error_hours'].abs() < 1).mean() * 100
+    early_estimates = (df['error_hours'] > 1).mean() * 100  # Positive error means actual time was later
+    late_estimates = (df['error_hours'] < -1).mean() * 100  # Negative error means actual time was earlier
+    
+    # Store these values
+    stats['correct_estimates'] = correct_estimates
+    stats['early_estimates'] = early_estimates
+    stats['late_estimates'] = late_estimates
     
     # By withdrawal type
     stats['by_type'] = df.groupby('withdrawal_type')['error_hours'].agg([
@@ -608,16 +412,25 @@ def calculate_statistics(df):
         lambda x: x.abs().mean()
     ]).rename(columns={'<lambda_0>': 'mean_absolute_error'}).to_dict('index')
     
-    # Time of day statistics
-    hourly_stats = analyze_time_of_day(df)
-    stats['peak_processing_hour'] = hourly_stats.loc[hourly_stats['count'].idxmax(), 'hour']
-    stats['peak_processing_count'] = hourly_stats['count'].max()
+    # Calculate day-based accuracy distribution for cumulative chart
+    max_days_error = min(int(df['error_days'].max()) + 1, 10)  # Cap at 10 days
+    accuracy_by_days = []
     
-    # Batch processing statistics
-    batch_counts, batch_stats = analyze_batch_processing(df)
-    stats['mean_batch_size'] = batch_stats['mean_batch_size'].mean()
-    stats['median_batch_size'] = batch_stats['median_batch_size'].mean()
-    stats['max_batch_size'] = batch_stats['max_batch_size'].max()
+    for day in range(max_days_error + 1):
+        accuracy = (df['error_days'] < day).mean() * 100
+        accuracy_by_days.append({
+            'days': day,
+            'cumulative_accuracy': accuracy
+        })
+    
+    stats['accuracy_by_days'] = accuracy_by_days
+    
+    # Processing pattern statistics
+    daily_withdrawals, processing_stats = analyze_batch_processing(df)
+    stats['mean_daily_withdrawals'] = processing_stats['mean_daily_withdrawals']
+    stats['median_daily_withdrawals'] = processing_stats['median_daily_withdrawals']
+    stats['max_daily_withdrawals'] = processing_stats['max_daily_withdrawals']
+    stats['days_with_processing'] = processing_stats['days_with_processing']
     
     # Accuracy over time statistics
     accuracy_over_time = analyze_accuracy_over_time(df)
@@ -630,7 +443,337 @@ def calculate_statistics(df):
         '72h+': accuracy_over_time.loc[accuracy_over_time['time_until'] == '72h+', 'mean_abs_error'].iloc[0]
     }
     
-    return stats
+    return stats, daily_withdrawals
+
+def generate_altair_visualizations(df):
+    """Generate Altair visualizations from the analysis data"""
+    visualizations = {}
+    
+    # Create a copy of the DataFrame for visualization
+    df_viz = df.copy()
+    
+    # Ensure numeric columns are float
+    df_viz['error_hours'] = df_viz['error_hours'].astype(float)
+    df_viz['hours_in_advance'] = df_viz['hours_in_advance'].astype(float)
+    df_viz['absolute_error_hours'] = df_viz['absolute_error_hours'].astype(float)
+    df_viz['withdrawal_type'] = df_viz['withdrawal_type'].astype(str)
+    df_viz['withdrawal_id'] = df_viz['withdrawal_id'].astype(str)
+    
+    # Add error_days column for day-based visualizations
+    df_viz['error_days'] = df_viz['error_hours'] / 24
+    
+    # 1. Error distribution histogram - one bar per day
+    # Round error_days to nearest integer for day-based binning
+    df_viz['error_days_rounded'] = np.round(df_viz['error_days'])
+    
+    # Define the range of days to show
+    max_days = min(7, int(np.ceil(df_viz['error_days_rounded'].abs().max())))
+    day_values = list(range(-max_days, max_days + 1))
+    
+    # Create a bar chart with one bar per day
+    error_hist = alt.Chart(df_viz).mark_bar().encode(
+        alt.X('error_days_rounded:Q', 
+              title='Error (Actual - Estimated) in Days',
+              axis=alt.Axis(values=day_values, tickMinStep=1),
+              scale=alt.Scale(domain=[-max_days, max_days])),
+        alt.Y('count()', title='Frequency'),
+        tooltip=['error_days_rounded:Q', 'count()']
+    ).properties(
+        title='Distribution of Estimate Errors (Days)',
+        width=900,
+        height=400
+    )
+    
+    # Add a rule for perfect estimate (Error = 0)
+    perfect_line = alt.Chart(pd.DataFrame({'x': [0]})).mark_rule(
+        color='red', 
+        strokeDash=[6, 4],
+        strokeWidth=2
+    ).encode(x='x:Q')
+    
+    error_dist_chart = (error_hist + perfect_line)
+    
+    visualizations['error_distribution'] = error_dist_chart
+    
+    # 2. Error vs Estimation Lead Time - using actual completion time instead of expected
+    # Calculate days between estimate time and actual completion time
+    df_viz['days_until_actual'] = (df_viz['actual_time'] - df_viz['time_of_estimate']).dt.total_seconds() / (24 * 3600)
+    
+    # Add hour of estimate to help with sampling
+    df_viz['estimate_hour'] = df_viz['time_of_estimate'].dt.strftime('%Y-%m-%d-%H')
+    
+    # Select one estimate per withdrawal ID per hour to reduce density
+    df_viz_sampled = df_viz.sort_values('time_of_estimate').groupby(['withdrawal_id', 'estimate_hour']).first().reset_index()
+    print(f"Reduced Error vs Leadtime chart data points from {len(df_viz)} to {len(df_viz_sampled)} (one per withdrawal ID per hour)")
+    
+    # Add a small random jitter to better visualize point density
+    df_viz_sampled['error_days_jittered'] = df_viz_sampled['error_days'] + np.random.normal(0, 0.1, size=len(df_viz_sampled))
+    
+    scatter = alt.Chart(df_viz_sampled).mark_circle(opacity=0.7, size=60).encode(
+        x=alt.X('days_until_actual:Q', 
+                title='Days Between Estimate and Actual Completion Time',
+                axis=alt.Axis(titleFontSize=14)),
+        y=alt.Y('error_days_jittered:Q', 
+                title='Error in Days (Positive = Actual later than estimated)',
+                axis=alt.Axis(titleFontSize=14)),
+        tooltip=['withdrawal_id', 
+                alt.Tooltip('error_days_jittered:Q', format='.2f', title='Error (days)'), 
+                alt.Tooltip('days_until_actual:Q', format='.2f', title='Days until actual completion')]
+    ).properties(
+        title=alt.TitleParams(
+            'Estimate Error vs. Lead Time',
+            subtitle='Shows how accuracy varies with how far in advance the estimate was made',
+            fontSize=16
+        ),
+        width=900,
+        height=400
+    )
+    
+    # Add a rule for perfect estimate (Error = 0)
+    zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
+        color='red', 
+        strokeDash=[6, 4],
+        strokeWidth=2
+    ).encode(y='y:Q')
+    
+    # Add explanatory text annotations
+    positive_text = alt.Chart(pd.DataFrame({
+        'x': [df_viz_sampled['days_until_actual'].max() * 0.9],
+        'y': [df_viz_sampled['error_days_jittered'].max() * 0.8],
+        'text': ['Actual later than estimated']
+    })).mark_text(fontSize=14, color='#e74c3c', fontWeight='bold').encode(
+        x='x:Q',
+        y='y:Q',
+        text='text:N'
+    )
+    
+    negative_text = alt.Chart(pd.DataFrame({
+        'x': [df_viz_sampled['days_until_actual'].max() * 0.9],
+        'y': [df_viz_sampled['error_days_jittered'].min() * 0.8],
+        'text': ['Actual earlier than estimated']
+    })).mark_text(fontSize=14, color='#27ae60', fontWeight='bold').encode(
+        x='x:Q',
+        y='y:Q',
+        text='text:N'
+    )
+    
+    # Add notes explaining chart features
+    gap_note = alt.Chart(pd.DataFrame({
+        'x': [df_viz_sampled['days_until_actual'].max() * 0.5],
+        'y': [df_viz_sampled['error_days_jittered'].min() * 0.5],
+        'text': ['Horizontal gaps represent regular update intervals']
+    })).mark_text(fontSize=12, color='#666666', align='center').encode(
+        x='x:Q',
+        y='y:Q',
+        text='text:N'
+    )
+    
+    jitter_note = alt.Chart(pd.DataFrame({
+        'x': [df_viz_sampled['days_until_actual'].max() * 0.5],
+        'y': [df_viz_sampled['error_days_jittered'].min() * 0.35],
+        'text': ['Points are jittered to better show density']
+    })).mark_text(fontSize=12, color='#666666', align='center').encode(
+        x='x:Q',
+        y='y:Q',
+        text='text:N'
+    )
+    
+    error_vs_leadtime_chart = (scatter + zero_line + positive_text + negative_text)
+    
+    # Store the notes as separate variables to be used in HTML generation
+    leadtime_chart_notes = [
+        "Horizontal gaps represent regular update intervals",
+        "Points are jittered to better show density"
+    ]
+    
+    visualizations['error_vs_leadtime'] = error_vs_leadtime_chart
+    visualizations['error_vs_leadtime_notes'] = leadtime_chart_notes
+    
+    # 4. New: Cumulative accuracy by day difference chart
+    # Create a data frame with discrete whole day values (0, 1, 2, 3, etc.)
+    max_days_error = min(int(df_viz['error_days'].abs().max()) + 1, 10)  # Cap at 10 days
+    
+    # Generate data for whole day values
+    accuracy_by_days_df = pd.DataFrame([
+        {"days": day, "cumulative_accuracy": (df_viz['error_days'].abs() < day).mean() * 100}
+        for day in range(max_days_error + 1)
+    ])
+    
+    # Create a line chart showing cumulative accuracy with discrete day values
+    cumulative_accuracy = alt.Chart(accuracy_by_days_df).mark_line(point=True).encode(
+        x=alt.X('days:Q', 
+                title='Days Difference',
+                axis=alt.Axis(values=list(range(max_days_error + 1)), tickMinStep=1),
+                scale=alt.Scale(domain=[0, max_days_error])),
+        y=alt.Y('cumulative_accuracy:Q', 
+                title='Cumulative Percentage of Estimates', 
+                scale=alt.Scale(domain=[0, 100])),
+        tooltip=['days:Q', alt.Tooltip('cumulative_accuracy:Q', title='Cumulative Percentage', format='.1f')]
+    ).properties(
+        title='Cumulative Share of Estimates by Days Difference',
+        width=900,
+        height=400
+    )
+    
+    visualizations['cumulative_accuracy'] = cumulative_accuracy
+    
+    # 5. Accuracy over time
+    accuracy_over_time = analyze_accuracy_over_time(df)  # Use original df for analysis
+    accuracy_over_time = accuracy_over_time.copy()
+    
+    # Define the correct order for time intervals
+    time_order = ['0-6h', '6-12h', '12-24h', '24-48h', '48-72h', '72h+']
+    
+    accuracy_over_time['time_until'] = accuracy_over_time['time_until'].astype(str)
+    accuracy_over_time['mean_error'] = accuracy_over_time['mean_error'].astype(float)
+    accuracy_over_time['median_error'] = accuracy_over_time['median_error'].astype(float)
+    accuracy_over_time['std_error'] = accuracy_over_time['std_error'].astype(float)
+    accuracy_over_time['count'] = accuracy_over_time['count'].astype(int)
+    accuracy_over_time['mean_abs_error'] = accuracy_over_time['mean_abs_error'].astype(float)
+    accuracy_over_time['median_abs_error'] = accuracy_over_time['median_abs_error'].astype(float)
+    
+    # Create a line chart showing accuracy improvement with correct ordering
+    accuracy_line = alt.Chart(accuracy_over_time).mark_line().encode(
+        x=alt.X('time_until:N', title='Time Until Finalization', sort=time_order),
+        y=alt.Y('mean_abs_error:Q', title='Mean Absolute Error (Hours)'),
+        tooltip=['time_until:N', 'mean_abs_error:Q', 'median_abs_error:Q', 'count:Q']
+    ).properties(
+        title='Estimate Accuracy vs Time Until Finalization',
+        width=900,
+        height=400
+    )
+    visualizations['accuracy_over_time'] = accuracy_line
+    
+    # 6. NEW: Daily Withdrawal Processing with improved x-axis
+    # Get daily withdrawal data
+    _, daily_withdrawals = calculate_statistics(df)
+    daily_withdrawals_viz = daily_withdrawals.copy()
+    
+    # Convert date to string for visualization
+    daily_withdrawals_viz['processing_date_str'] = daily_withdrawals_viz['processing_date'].astype(str)
+    
+    # Get min and max dates for axis configuration
+    date_range = pd.date_range(
+        start=daily_withdrawals_viz['processing_date'].min(),
+        end=daily_withdrawals_viz['processing_date'].max(),
+        freq='D'
+    )
+    
+    # Bar chart showing number of unique withdrawals processed each day
+    daily_processing_chart = alt.Chart(daily_withdrawals_viz).mark_bar().encode(
+        x=alt.X(
+            'processing_date_str:T', 
+            title='Processing Date', 
+            axis=alt.Axis(
+                format='%Y-%m-%d',
+                tickCount=len(date_range) if len(date_range) <= 30 else 30,  # Limit ticks for large date ranges
+                labelAngle=-45  # Angle labels for better readability
+            ),
+            scale=alt.Scale(
+                domain=[date_range.min().isoformat(), date_range.max().isoformat()]
+            )
+        ),
+        y=alt.Y('unique_withdrawals:Q', title='Number of Unique Withdrawals'),
+        tooltip=['processing_date_str:T', 'unique_withdrawals:Q']
+    ).properties(
+        title='Number of Unique Withdrawals Processed Per Day',
+        width=900,
+        height=400
+    )
+    
+    visualizations['daily_processing'] = daily_processing_chart
+    
+    # 7. Distribution of daily withdrawal counts with improved x-axis
+    min_withdrawals = int(daily_withdrawals_viz['unique_withdrawals'].min())
+    max_withdrawals = int(daily_withdrawals_viz['unique_withdrawals'].max())
+    bin_step = max(1, (max_withdrawals - min_withdrawals) // 10)  # Create about 10 bins
+    
+    withdrawal_count_hist = alt.Chart(daily_withdrawals_viz).mark_bar().encode(
+        x=alt.X(
+            'unique_withdrawals:Q', 
+            bin=alt.Bin(step=bin_step),  # Use fixed step size for bins
+            title='Number of Withdrawals Per Day',
+            scale=alt.Scale(domain=[min_withdrawals, max_withdrawals]),
+            axis=alt.Axis(tickMinStep=1)  # Ensure whole number ticks
+        ),
+        y=alt.Y('count()', title='Frequency (Days)'),
+        tooltip=['count()', alt.Tooltip('unique_withdrawals:Q', title='Withdrawals per Day')]
+    ).properties(
+        title='Distribution of Daily Withdrawal Processing Counts',
+        width=900,
+        height=400
+    )
+    
+    visualizations['withdrawal_distribution'] = withdrawal_count_hist
+    
+    # 8. Individual withdrawal estimates over time
+    top_tracking_df = analyze_individual_estimates(df)  # Use original df for analysis
+    
+    # Use a copy to avoid modifying the original
+    individual_tracking = top_tracking_df.copy()
+    
+    # Format datetime columns to ISO format strings
+    individual_tracking['time_of_estimate_str'] = individual_tracking['time_of_estimate'].dt.strftime('%Y-%m-%dT%H:%M:%S')
+    individual_tracking['withdrawal_id'] = individual_tracking['withdrawal_id'].astype(str)
+    individual_tracking['hours_until_estimated'] = individual_tracking['hours_until_estimated'].astype(float)
+    individual_tracking['hours_until_actual'] = individual_tracking['hours_until_actual'].astype(float)
+    
+    # Create a line chart showing how estimates changed for individual withdrawals
+    # Use hours_until_actual as x-axis instead of time_of_estimate
+    estimates_line = alt.Chart(individual_tracking).mark_line(strokeWidth=3).encode(
+        x=alt.X('hours_until_actual:Q', 
+                title='Hours Until Actual Finalization', 
+                axis=alt.Axis(titleFontSize=14)),
+        y=alt.Y('hours_until_estimated:Q', 
+                title='Hours Until Estimated Finalization', 
+                scale=alt.Scale(zero=False)),
+        color=alt.Color('withdrawal_id:N', title='Withdrawal ID', legend=None),
+        tooltip=['withdrawal_id', 
+                'time_of_estimate_str:T', 
+                alt.Tooltip('hours_until_estimated:Q', title='Estimated hours remaining'),
+                alt.Tooltip('hours_until_actual:Q', title='Actual hours remaining')]
+    ).properties(
+        title='Individual Withdrawal Estimates vs Actual Finalization Time',
+        width=900,
+        height=500
+    )
+    
+    # Add reference lines for actual finalization times
+    actual_finalization_refs = []
+    
+    for withdrawal_id in individual_tracking['withdrawal_id'].unique():
+        # Get subset for this withdrawal
+        withdrawal_subset = individual_tracking[individual_tracking['withdrawal_id'] == withdrawal_id]
+        
+        # Calculate average hours until actual 
+        avg_hours_until_actual = withdrawal_subset['hours_until_actual'].mean()
+        
+        # Create reference data for this withdrawal
+        ref_df = pd.DataFrame({
+            'withdrawal_id': [withdrawal_id],
+            'hours_until_actual': [avg_hours_until_actual]
+        })
+        
+        # Create a reference line as a rule
+        ref_line = alt.Chart(ref_df).mark_rule(
+            strokeDash=[6, 4],
+            strokeWidth=2,
+            color='red'
+        ).encode(
+            y='hours_until_actual:Q',
+            color=alt.Color('withdrawal_id:N', legend=None)
+        )
+        
+        actual_finalization_refs.append(ref_line)
+    
+    # Combine main chart with all reference lines
+    individual_chart = estimates_line
+    for ref_line in actual_finalization_refs:
+        individual_chart += ref_line
+    
+    visualizations['individual_estimates'] = individual_chart
+    
+    return visualizations
 
 def generate_html(stats, visualizations):
     """Generate HTML for the static page with Altair visualizations"""
@@ -642,9 +785,9 @@ def generate_html(stats, visualizations):
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Withdrawal Time Estimate Accuracy Analysis</title>
-    <script src="https://cdn.jsdelivr.net/npm/vega@5"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega@5.22.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.21.0"></script>
     <style>
         body {{
             font-family: Arial, sans-serif;
@@ -675,13 +818,32 @@ def generate_html(stats, visualizations):
             gap: 30px;
             margin-top: 40px;
         }}
+        /* Side-by-side sections */
+        .side-by-side-sections {{
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            margin-bottom: 40px;
+        }}
+        .half-section {{
+            flex: 1;
+            max-width: 48%;
+        }}
         .chart-container {{
             background-color: white;
             border-radius: 8px;
             padding: 15px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-            height: 500px;
+            height: auto;
+            min-height: 500px;
             width: 100%;
+            overflow: hidden;
+            margin-bottom: 30px;
+        }}
+        .vis-container {{
+            width: 100%;
+            height: 100%;
+            min-height: 400px;
         }}
         table {{
             width: 100%;
@@ -717,6 +879,20 @@ def generate_html(stats, visualizations):
         .section {{
             margin-bottom: 40px;
         }}
+        .chart-notes {{
+            margin-top: 15px;
+            background-color: #f8f9fa;
+            padding: 10px 15px;
+            border-radius: 5px;
+            font-size: 14px;
+        }}
+        .chart-notes ul {{
+            margin: 8px 0 0 0;
+            padding-left: 25px;
+        }}
+        .chart-notes li {{
+            margin-bottom: 5px;
+        }}
     </style>
 </head>
 <body>
@@ -741,50 +917,54 @@ def generate_html(stats, visualizations):
             </div>
             
             <div class="stat-card">
-                <h3>Accuracy Ranges</h3>
-                <p>Within 1 hour: <span class="highlight">{within_1h:.1f}%</span></p>
-                <p>Within 6 hours: <span class="highlight">{within_6h:.1f}%</span></p>
-                <p>Within 12 hours: <span class="highlight">{within_12h:.1f}%</span></p>
-                <p>Within 24 hours: <span class="highlight">{within_24h:.1f}%</span></p>
+                <h3>Day-Based Accuracy</h3>
+                <p>Correct Day: <span class="highlight">{correct_day:.1f}%</span></p>
+                <p>Within ±1 day: <span class="highlight">{within_1day:.1f}%</span></p>
+                <p>Within ±2 days: <span class="highlight">{within_2days:.1f}%</span></p>
+                <p>Within ±3 days: <span class="highlight">{within_3days:.1f}%</span></p>
+                <p>Within ±7 days: <span class="highlight">{within_7days:.1f}%</span></p>
             </div>
             
             <div class="stat-card">
                 <h3>Estimate Direction</h3>
                 <p>Early Estimates: <span class="positive">{early_est:.1f}%</span> (actual later than estimated)</p>
                 <p>Late Estimates: <span class="negative">{late_est:.1f}%</span> (actual earlier than estimated)</p>
+                <p class="note">Excludes estimates within ±1 hour of actual time (considered correct)</p>
             </div>
         </div>
     </div>
 
-    <div class="section">
-        <h2>Processing Patterns</h2>
-        <div class="dashboard">
-            <div class="stat-card">
-                <h3>Time of Day Analysis</h3>
-                <p>Peak Processing Hour: <span class="highlight">{peak_hour:02d}:00 UTC</span></p>
-                <p>Peak Processing Count: <span class="highlight">{peak_count}</span> withdrawals</p>
-            </div>
-            
-            <div class="stat-card">
-                <h3>Batch Processing</h3>
-                <p>Mean Batch Size: <span class="highlight">{mean_batch:.1f}</span> withdrawals</p>
-                <p>Median Batch Size: <span class="highlight">{median_batch:.1f}</span> withdrawals</p>
-                <p>Largest Batch: <span class="highlight">{max_batch}</span> withdrawals</p>
+    <!-- Processing Patterns and Accuracy Over Time side by side -->
+    <div class="side-by-side-sections">
+        <!-- Left section: Processing Patterns -->
+        <div class="half-section">
+            <h2>Processing Patterns</h2>
+            <div class="dashboard">
+                <div class="stat-card">
+                    <h3>Daily Processing</h3>
+                    <p>Mean Withdrawals per Day: <span class="highlight">{mean_daily:.1f}</span></p>
+                    <p>Median Withdrawals per Day: <span class="highlight">{median_daily:.1f}</span></p>
+                    <p>Maximum Withdrawals per Day: <span class="highlight">{max_daily}</span></p>
+                    <p>Days with Processing: <span class="highlight">{days_processing}</span></p>
+                    <p class="note">Withdrawals are processed in bulk once per day</p>
+                </div>
             </div>
         </div>
-    </div>
-
-    <div class="section">
-        <h2>Accuracy Over Time</h2>
-        <div class="dashboard">
-            <div class="stat-card">
-                <h3>Estimate Accuracy by Time Until Finalization</h3>
-                <p>0-6 hours: <span class="highlight">{acc_0_6:.2f} hours</span> error</p>
-                <p>6-12 hours: <span class="highlight">{acc_6_12:.2f} hours</span> error</p>
-                <p>12-24 hours: <span class="highlight">{acc_12_24:.2f} hours</span> error</p>
-                <p>24-48 hours: <span class="highlight">{acc_24_48:.2f} hours</span> error</p>
-                <p>48-72 hours: <span class="highlight">{acc_48_72:.2f} hours</span> error</p>
-                <p>72+ hours: <span class="highlight">{acc_72_plus:.2f} hours</span> error</p>
+        
+        <!-- Right section: Accuracy Over Time -->
+        <div class="half-section">
+            <h2>Accuracy Over Time</h2>
+            <div class="dashboard">
+                <div class="stat-card">
+                    <h3>Estimate Accuracy by Time Until Finalization</h3>
+                    <p>Mean Absolute Error (hours) by time remaining:</p>
+                    <p>0-6 hours: <span class="highlight">{acc_0_6:.2f} hours</span></p>
+                    <p>6-12 hours: <span class="highlight">{acc_6_12:.2f} hours</span></p>
+                    <p>12-24 hours: <span class="highlight">{acc_12_24:.2f} hours</span></p>
+                    <p>24-48 hours: <span class="highlight">{acc_24_48:.2f} hours</span></p>
+                    <p>48-72 hours: <span class="highlight">{acc_48_72:.2f} hours</span></p>
+                    <p>72+ hours: <span class="highlight">{acc_72_plus:.2f} hours</span></p>
+                </div>
             </div>
         </div>
     </div>
@@ -797,17 +977,17 @@ def generate_html(stats, visualizations):
         mean_error=stats['mean_error_hours'],
         median_error=stats['median_error_hours'],
         mean_abs_error=stats['mean_absolute_error'],
-        within_1h=stats['within_1hour'],
-        within_6h=stats['within_6hours'],
-        within_12h=stats['within_12hours'],
-        within_24h=stats['within_24hours'],
+        correct_day=stats['correct_day'],
+        within_1day=stats['within_1day'],
+        within_2days=stats['within_2days'],
+        within_3days=stats['within_3days'],
+        within_7days=stats['within_7days'],
         early_est=stats['early_estimates'],
         late_est=stats['late_estimates'],
-        peak_hour=stats['peak_processing_hour'],
-        peak_count=stats['peak_processing_count'],
-        mean_batch=stats['mean_batch_size'],
-        median_batch=stats['median_batch_size'],
-        max_batch=stats['max_batch_size'],
+        mean_daily=stats['mean_daily_withdrawals'],
+        median_daily=stats['median_daily_withdrawals'],
+        max_daily=stats['max_daily_withdrawals'],
+        days_processing=stats['days_with_processing'],
         acc_0_6=stats['accuracy_improvement']['0-6h'],
         acc_6_12=stats['accuracy_improvement']['6-12h'],
         acc_12_24=stats['accuracy_improvement']['12-24h'],
@@ -815,33 +995,6 @@ def generate_html(stats, visualizations):
         acc_48_72=stats['accuracy_improvement']['48-72h'],
         acc_72_plus=stats['accuracy_improvement']['72h+']
     )
-    
-    # Table for withdrawal types
-    type_table = """
-    <div class="section">
-        <h2>By Withdrawal Type</h2>
-        <table>
-            <tr>
-                <th>Type</th>
-                <th>Count</th>
-                <th>Mean Error (h)</th>
-                <th>Median Error (h)</th>
-                <th>Mean Abs Error (h)</th>
-            </tr>
-    """
-    
-    for wtype, metrics in stats['by_type'].items():
-        type_table += f"""
-            <tr>
-                <td>{wtype}</td>
-                <td>{metrics['count']}</td>
-                <td>{metrics['mean']:.2f}</td>
-                <td>{metrics['median']:.2f}</td>
-                <td>{metrics['mean_absolute_error']:.2f}</td>
-            </tr>
-        """
-    
-    type_table += "</table></div>"
     
     # Table for lead time groups
     lead_time_table = """
@@ -879,16 +1032,35 @@ def generate_html(stats, visualizations):
         <div class="visualizations">
     """
     
-    # Add each Altair visualization
+    # Add each Altair visualization - prepare chart specs but don't embed yet
+    chart_specs = {}
+    
     for i, (title, chart) in enumerate(visualizations.items()):
+        # Skip the error_by_type chart and notes
+        if title == 'error_by_type' or title.endswith('_notes'):
+            continue
+            
         chart_title = ' '.join(word.capitalize() for word in title.split('_'))
+        
+        # Add notes for Error vs Leadtime chart
+        notes_html = ""
+        if title == 'error_vs_leadtime' and f"{title}_notes" in visualizations:
+            notes_html = '<div class="chart-notes"><strong>Notes:</strong><ul>'
+            for note in visualizations[f"{title}_notes"]:
+                notes_html += f"<li>{note}</li>"
+            notes_html += "</ul></div>"
+        
         chart_html = f"""
             <div class="chart-container">
                 <h3>{chart_title}</h3>
                 <div id="vis{i}" class="vis-container"></div>
+                {notes_html}
             </div>
         """
         vis_section += chart_html
+        
+        # Convert to spec dict
+        chart_specs[f"vis{i}"] = chart.to_dict()
     
     vis_section += "</div></div>"
     
@@ -902,26 +1074,49 @@ def generate_html(stats, visualizations):
             <li>Negative errors mean that the actual finalization occurred earlier than estimated.</li>
             <li>Data collected from DynamoDB table "lido_withdrawal_requests".</li>
             <li>Withdrawals are processed in bulk once a day at roughly the same time.</li>
+            <li>Day-based accuracy metrics are more relevant than hour-based metrics due to the once-per-day processing pattern.</li>
+            <li>The processing patterns section focuses on unique withdrawals processed each day, not individual estimates.</li>
+            <li>For "Estimate Direction" statistics, estimates within ±1 hour of actual time are excluded (considered correct).</li>
+            <li>The "true lead time" reference line in the Error vs Leadtime chart shows the theoretical boundary with 24-hour steps.</li>
             <li>Analysis timestamp: """ + datetime.now().strftime('%Y-%m-%d %H:%M:%S UTC') + """</li>
         </ul>
     </div>
     """
     
-    # JavaScript to render the visualizations
+    # JavaScript to render the visualizations - simpler embedding approach
     js_section = "<script>"
     
-    for i, (title, chart) in enumerate(visualizations.items()):
-        # Get chart as dictionary and use custom JSON encoder
-        spec_dict = chart.to_dict()
-        spec_str = json.dumps(spec_dict, cls=CustomJSONEncoder)
-        js_section += f"""
-        vegaEmbed('#vis{i}', {spec_str}, {{actions: false}}).catch(console.error);
-        """
+    # Add chart specs as a global variable
+    specs_json = json.dumps(chart_specs, cls=CustomJSONEncoder)
+    js_section += f"""
+    // Chart specifications
+    const chartSpecs = {specs_json};
+    
+    // Function to render all charts
+    function renderCharts() {{
+        // Render each chart
+        Object.keys(chartSpecs).forEach(function(elemId) {{
+            vegaEmbed('#' + elemId, chartSpecs[elemId], {{
+                mode: "vega-lite",
+                actions: false,
+                renderer: "svg",
+                logLevel: 'info'
+            }}).catch(function(error) {{
+                console.error('Error rendering chart', elemId, error);
+                document.getElementById(elemId).innerHTML = 
+                    '<p style="color:red">Error rendering chart: ' + error.message + '</p>';
+            }});
+        }});
+    }}
+    
+    // Render charts when page loads
+    document.addEventListener('DOMContentLoaded', renderCharts);
+    """
     
     js_section += "</script></body></html>"
     
-    # Combine all sections
-    full_html = formatted_header + type_table + lead_time_table + vis_section + footer + js_section
+    # Combine all sections - remove type_table
+    full_html = formatted_header + lead_time_table + vis_section + footer + js_section
     
     return full_html
 
@@ -944,7 +1139,7 @@ def main():
         
     # Calculate statistics
     print("Calculating statistics...")
-    stats = calculate_statistics(df)
+    stats, _ = calculate_statistics(df)
     
     # Generate Altair visualizations
     print("Generating Altair visualizations...")
