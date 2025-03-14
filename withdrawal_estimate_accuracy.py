@@ -955,7 +955,7 @@ def main():
     html = generate_html(stats, visualizations)
     
     # Save HTML to file
-    output_file = "withdrawal_estimate_accuracy.html"
+    output_file = "index.html"
     with open(output_file, "w") as f:
         f.write(html)
     
