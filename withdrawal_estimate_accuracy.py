@@ -537,6 +537,9 @@ def generate_altair_visualizations(df):
                            on=['hours_to_completion_rounded', 'error_day_bin'],
                            how='left').fillna(0)
     
+    # Filter out bins with zero counts
+    heatmap_data = heatmap_data[heatmap_data['count'] > 0]
+    
     # Calculate percentage within each hour (vertical columns sum to 100%)
     total_by_hour = heatmap_data.groupby('hours_to_completion_rounded')['count'].sum().reset_index()
     heatmap_data = heatmap_data.merge(total_by_hour, on='hours_to_completion_rounded', suffixes=('', '_total'))
@@ -583,7 +586,8 @@ def generate_altair_visualizations(df):
                 'Heatmap shows distribution of errors for each hour until completion',
                 'Color intensity shows percentage of estimates within each hour (columns sum to 100%)',
                 'Bins are centered around full days (±0.5) and hours (±0.5)',
-                'Positive error: Actual completion later than estimated'
+                'Positive error: Actual completion later than estimated',
+                'Only bins with actual data are shown'
             ],
             'fontSize': 16
         },
