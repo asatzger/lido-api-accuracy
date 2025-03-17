@@ -9,9 +9,16 @@ on:
 jobs:
   analyze:
     runs-on: ubuntu-latest
+    # Add permissions needed for GitHub Pages
+    permissions:
+      contents: write
+      pages: write
+      
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
+        with:
+          fetch-depth: 0  # Fetch all history to ensure proper git operations
 
       - name: Set up Python
         uses: actions/setup-python@v4
@@ -47,4 +54,12 @@ jobs:
           git config --local user.name "github-actions[bot]"
           git add index.html
           git diff --staged --quiet || git commit -m "Update withdrawal analysis report [automated]" -m "Daily update triggered by GitHub Actions"
-          git push 
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
+          
+      # This step explicitly triggers the GitHub Pages build and deployment
+      - name: Trigger GitHub Pages build
+        run: |
+          curl -X POST \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github.v3+json" \
+            https://api.github.com/repos/${{ github.repository }}/pages/builds 
