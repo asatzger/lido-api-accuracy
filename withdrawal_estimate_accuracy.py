@@ -504,19 +504,35 @@ def generate_altair_visualizations(df):
     # Create bins centered around full hours (-0.5 to +0.5)
     df_viz_sampled['hours_to_completion_rounded'] = np.floor(df_viz_sampled['hours_to_completion'] + 0.5)
     
+    # Print error ranges to ensure we're not cutting off data
+    print("\nError ranges in data:")
+    print(f"Min error days: {df_viz_sampled['error_days'].min():.2f}")
+    print(f"Max error days: {df_viz_sampled['error_days'].max():.2f}")
+    print(f"Max hours to completion: {df_viz_sampled['hours_to_completion'].max():.2f}")
+    
     # Create error day bins centered around full days (-0.5 to +0.5)
+    min_error = int(np.floor(df_viz_sampled['error_days'].min())) - 0.5
+    max_error = int(np.ceil(df_viz_sampled['error_days'].max())) + 0.5
+    
+    print(f"\nSetting bin boundaries from {min_error} to {max_error}")
+    
+    # Create bins and labels
+    bins = np.arange(min_error, max_error + 1, 1)
+    labels = [f"{i}" if i < 0 else f"+{i}" for i in range(int(min_error + 0.5), int(max_error + 0.5))]
+    
     df_viz_sampled['error_day_bin'] = pd.cut(
         df_viz_sampled['error_days'],
-        bins=np.arange(-3.5, 4.5, 1),  # Creates bins: [-3.5, -2.5), [-2.5, -1.5), ..., [2.5, 3.5)
-        labels=['-3', '-2', '-1', '0', '+1', '+2', '+3']
+        bins=bins,
+        labels=labels,
+        right=False  # Make bins left-inclusive
     )
     
-    # Limit to first 72 hours (3 days) for better visualization
-    df_viz_sampled = df_viz_sampled[df_viz_sampled['hours_to_completion_rounded'] <= 72]
+    # Get the maximum hours to completion (rounded up to nearest day in hours)
+    max_hours = int(np.ceil(df_viz_sampled['hours_to_completion'].max() / 24) * 24)
     
     # Create a complete grid of all possible hour and error bin combinations
-    hours = np.arange(0, 73)  # 0 to 72 hours
-    error_bins = ['-3', '-2', '-1', '0', '+1', '+2', '+3']
+    hours = np.arange(0, max_hours + 1)  # Include all hours
+    error_bins = labels
     
     # Create meshgrid for hours and error bins
     hour_grid, error_grid = np.meshgrid(hours, error_bins)
@@ -551,7 +567,8 @@ def generate_altair_visualizations(df):
                 title='Hours Until Actual Completion',
                 axis=alt.Axis(
                     grid=True,
-                    tickMinStep=1,
+                    values=list(range(0, max_hours + 1, 6)),  # Only show labels every 6 hours
+                    labelAngle=0,
                     titleFontSize=14
                 )),
         y=alt.Y('error_day_bin:O',
@@ -560,7 +577,7 @@ def generate_altair_visualizations(df):
                     titleFontSize=14,
                     grid=True
                 ),
-                sort=['-3', '-2', '-1', '0', '+1', '+2', '+3']),
+                sort=labels),  # Use the dynamically generated labels for sorting
         color=alt.Color('percentage:Q',
                        scale=alt.Scale(
                            scheme='viridis',
