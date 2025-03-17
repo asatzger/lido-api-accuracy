@@ -862,7 +862,7 @@ def generate_html(stats, visualizations):
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Withdrawal Time Estimate Accuracy Analysis</title>
+    <title>Lido Withdrawals API - Estimate Accuracy Analysis</title>
     <script src="https://cdn.jsdelivr.net/npm/vega@5.22.1"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.6.0"></script>
     <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.21.0"></script>
@@ -877,6 +877,34 @@ def generate_html(stats, visualizations):
         }}
         h1, h2, h3 {{
             color: #2c3e50;
+        }}
+        .intro {{
+            background-color: #f8f9fa;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+        }}
+        .intro h2 {{
+            margin-top: 0;
+            color: #34495e;
+        }}
+        .intro p {{
+            margin-bottom: 10px;
+        }}
+        .api-endpoints {{
+            background-color: #f1f3f5;
+            padding: 15px;
+            border-radius: 6px;
+            margin: 10px 0;
+        }}
+        .api-endpoints code {{
+            display: block;
+            background-color: #fff;
+            padding: 8px;
+            margin: 5px 0;
+            border-radius: 4px;
+            font-family: monospace;
         }}
         .dashboard {{
             display: grid;
@@ -896,7 +924,6 @@ def generate_html(stats, visualizations):
             gap: 30px;
             margin-top: 40px;
         }}
-        /* Side-by-side sections */
         .side-by-side-sections {{
             display: flex;
             justify-content: space-between;
@@ -957,26 +984,43 @@ def generate_html(stats, visualizations):
         .section {{
             margin-bottom: 40px;
         }}
-        .chart-notes {{
-            margin-top: 15px;
-            background-color: #f8f9fa;
-            padding: 10px 15px;
-            border-radius: 5px;
-            font-size: 14px;
-        }}
-        .chart-notes ul {{
-            margin: 8px 0 0 0;
-            padding-left: 25px;
-        }}
-        .chart-notes li {{
-            margin-bottom: 5px;
-        }}
     </style>
 </head>
 <body>
-    <h1>Withdrawal Time Estimate Accuracy Analysis</h1>
-    <p>Analysis of the accuracy of withdrawal time estimates versus actual finalization times.</p>
+    <h1>Lido Withdrawals API - Estimate Accuracy Analysis</h1>
     
+    <div class="intro">
+        <h2>About This Analysis</h2>
+        <p>This analysis evaluates the accuracy of the Lido Withdrawals API's request-time endpoint, which estimates the time to withdrawal finalization for unfinalized stETH redemption requests within the Lido on Ethereum protocol.</p>
+        
+        <h3>Withdrawals API Overview</h3>
+        <p>The Withdrawals API service provides utilities for estimating and tracking withdrawal waiting times in the Lido protocol. It serves two main use cases:</p>
+        <ul>
+            <li>Pre-request estimation: Users can estimate waiting times before placing withdrawal requests</li>
+            <li>Request tracking: Users can monitor estimated waiting times for existing requests</li>
+        </ul>
+        
+        <div class="api-endpoints">
+            <h4>Key Endpoints:</h4>
+            <code>GET https://wq-api.lido.fi/v2/request-time?ids=1&ids=2</code>
+            <p class="note">Calculate time to withdrawal for specific request IDs</p>
+            
+            <code>GET https://wq-api.lido.fi/v2/request-time/calculate</code>
+            <p class="note">Calculate time to withdrawal for current queue</p>
+            
+            <code>GET https://wq-api.lido.fi/v2/request-time/calculate?amount=32</code>
+            <p class="note">Calculate time to withdrawal for specific stETH amount</p>
+            
+            <h4>Testnet (Holesky):</h4>
+            <code>GET https://wq-api-holesky.testnet.fi/v2/request-time?ids=1&ids=2</code>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>Analysis Results</h2>
+        <p>The following analysis examines the accuracy of withdrawal time estimates by comparing predicted finalization times against actual finalization times.</p>
+    </div>
+
     <div class="section">
         <h2>Key Statistics</h2>
         <div class="dashboard">
