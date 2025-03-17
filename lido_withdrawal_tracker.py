@@ -3,11 +3,21 @@ import json
 import boto3
 import requests
 import time
-from datetime import datetime, UTC
+from datetime import datetime, UTC, date
 from botocore.exceptions import ClientError
 from dotenv import load_dotenv
 import concurrent.futures
 from concurrent.futures import ThreadPoolExecutor
+
+# Add a custom JSON encoder class that can handle date objects
+class DateTimeEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, (datetime, date)):
+            return obj.isoformat()
+        return super().default(obj)
+
+# Create a session for connection pooling
+http_session = requests.Session()
 
 # Load environment variables from .env file
 load_dotenv()
@@ -15,9 +25,10 @@ load_dotenv()
 # Configuration
 API_URL = "https://wq-api.lido.fi/v2/request-time"
 BATCH_SIZE = 20
+MAX_CONCURRENT_BATCHES = 5  # Increased from 2
 TABLE_NAME = "lido_withdrawal_requests"
 REGION_NAME = os.getenv('AWS_REGION', 'us-east-1')  # Use environment variable with fallback
-MAX_REQUEST_ID = 75000  # Upper bound for request IDs
+MAX_REQUEST_ID = 80000  # Upper bound for request IDs
 
 # Initialize AWS clients
 s3_client = boto3.client(
@@ -42,16 +53,44 @@ def ensure_table_exists():
         return table
     except ClientError as e:
         if e.response['Error']['Code'] == 'ResourceNotFoundException':
-            # Create the table with composite key
+            # Create the table with optimized schema
             table = dynamodb.create_table(
                 TableName=TABLE_NAME,
                 KeySchema=[
-                    {'AttributeName': 'withdrawal_id', 'KeyType': 'HASH'},  # Partition key
-                    {'AttributeName': 'timestamp', 'KeyType': 'RANGE'}  # Sort key
+                    {'AttributeName': 'status', 'KeyType': 'HASH'},  # Partition key
+                    {'AttributeName': 'withdrawal_id', 'KeyType': 'RANGE'}  # Sort key
                 ],
                 AttributeDefinitions=[
+                    {'AttributeName': 'status', 'AttributeType': 'S'},
                     {'AttributeName': 'withdrawal_id', 'AttributeType': 'N'},
+                    {'AttributeName': 'finalization_time', 'AttributeType': 'N'},
                     {'AttributeName': 'timestamp', 'AttributeType': 'S'}
+                ],
+                GlobalSecondaryIndexes=[
+                    {
+                        'IndexName': 'finalization-index',
+                        'KeySchema': [
+                            {'AttributeName': 'status', 'KeyType': 'HASH'},
+                            {'AttributeName': 'finalization_time', 'KeyType': 'RANGE'}
+                        ],
+                        'Projection': {'ProjectionType': 'ALL'},
+                        'ProvisionedThroughput': {
+                            'ReadCapacityUnits': 5,
+                            'WriteCapacityUnits': 5
+                        }
+                    },
+                    {
+                        'IndexName': 'timestamp-index',
+                        'KeySchema': [
+                            {'AttributeName': 'withdrawal_id', 'KeyType': 'HASH'},
+                            {'AttributeName': 'timestamp', 'KeyType': 'RANGE'}
+                        ],
+                        'Projection': {'ProjectionType': 'ALL'},
+                        'ProvisionedThroughput': {
+                            'ReadCapacityUnits': 5,
+                            'WriteCapacityUnits': 5
+                        }
+                    }
                 ],
                 ProvisionedThroughput={
                     'ReadCapacityUnits': 5,
@@ -96,13 +135,13 @@ def fetch_single_batch(batch_ids, table):
     non_finalized_found = False
     lowest_non_finalized_id = None
     max_retries = 3
-    calculating_found = False  # New flag to track calculating status
+    calculating_found = False
     
     retry_count = 0
     while retry_count < max_retries:
         try:
             params = [('ids', str(id_val)) for id_val in batch_ids]
-            response = requests.get(API_URL, params=params)
+            response = http_session.get(API_URL, params=params)
             
             if response.status_code != 200:
                 print(f"Error: API returned {response.status_code} for IDs {batch_ids[0]}-{batch_ids[-1]}")
@@ -121,32 +160,23 @@ def fetch_single_batch(batch_ids, table):
             # Process each result
             if isinstance(data, list):
                 current_time = datetime.now(UTC).isoformat()
+                
+                # Create a dictionary of results for faster lookup
+                valid_results = {}
                 for idx, result in enumerate(data):
                     id_val = batch_ids[idx]
-                    if result is None:
-                        continue
-                    
-                    # Check if status is calculating
-                    if result.get('status') == 'calculating':
-                        calculating_found = True
-                    
-                    # Check if we already have this record
-                    try:
-                        existing_records = table.query(
-                            KeyConditionExpression='withdrawal_id = :id AND #ts = :ts',
-                            ExpressionAttributeNames={'#ts': 'timestamp'},
-                            ExpressionAttributeValues={
-                                ':id': id_val,
-                                ':ts': current_time
-                            }
-                        )
-                        if existing_records['Items']:
-                            continue
-                    except Exception as e:
-                        print(f"Error checking existing record for ID {id_val}: {e}")
-                        continue
-                    
-                    # Process the withdrawal data
+                    if result is not None:
+                        valid_results[id_val] = result
+                        # Check if status is calculating
+                        if result.get('status') == 'calculating':
+                            calculating_found = True
+                
+                # Skip processing if no valid results
+                if not valid_results:
+                    return [], None, calculating_found
+                
+                # Process the withdrawal data
+                for id_val, result in valid_results.items():
                     request_info = result.get('requestInfo', {}) or {}
                     withdrawal_data = {
                         'withdrawal_id': id_val,
@@ -181,19 +211,18 @@ def fetch_withdrawal_data(start_id, table):
     """Fetch withdrawal data from the API using multiple threads"""
     all_results = []
     lowest_non_finalized_id = None
-    max_concurrent_batches = 2
     current_id = start_id
     
     print(f"\nStarting data collection from ID {start_id} (upper bound: {MAX_REQUEST_ID})")
     batch_summaries = []
     
-    with ThreadPoolExecutor(max_workers=max_concurrent_batches) as executor:
+    with ThreadPoolExecutor(max_workers=MAX_CONCURRENT_BATCHES) as executor:
         while current_id < MAX_REQUEST_ID:
             batch_start_id = current_id
             batch_futures = []
             
             # Prepare multiple batches
-            for _ in range(max_concurrent_batches):
+            for _ in range(MAX_CONCURRENT_BATCHES):
                 if current_id >= MAX_REQUEST_ID:
                     break
                 
@@ -258,49 +287,45 @@ def fetch_withdrawal_data(start_id, table):
     return all_results, lowest_non_finalized_id
 
 def store_data_in_dynamodb(data_items, table):
-    """Store data items in DynamoDB"""
+    """Store withdrawal data in DynamoDB with optimized schema"""
     if not data_items:
-        print("No new data to store")
         return
     
-    # Get current count
     try:
-        response = table.scan(
-            Select='COUNT'
-        )
-        initial_count = response['Count']
-        print(f"Current items in DB: {initial_count}")
-    except Exception as e:
-        print(f"Error getting initial count: {e}")
-        initial_count = 0
+        with table.batch_writer() as batch:
+            for item in data_items:
+                # Convert withdrawal_id to number
+                withdrawal_id = int(item['withdrawal_id'])
+                
+                # Calculate finalization_time if finalization_at exists
+                finalization_time = None
+                if 'finalization_at' in item:
+                    try:
+                        finalization_time = int(datetime.fromisoformat(item['finalization_at'].replace('Z', '+00:00')).timestamp())
+                    except (ValueError, TypeError):
+                        pass
+                
+                # Prepare item with new schema
+                dynamo_item = {
+                    'status': item['status'],
+                    'withdrawal_id': withdrawal_id,
+                    'timestamp': item['timestamp'],
+                    'type': item.get('type', 'unknown'),
+                    'finalization_in': item.get('finalization_in'),
+                    'finalization_at': item.get('finalization_at'),
+                    'next_calculation_at': item.get('next_calculation_at')
+                }
+                
+                if finalization_time:
+                    dynamo_item['finalization_time'] = finalization_time
+                
+                batch.put_item(Item=dynamo_item)
         
-    print(f"Attempting to store {len(data_items)} new records in DynamoDB...")
-    
-    # Track successful writes
-    success_count = 0
-    with table.batch_writer() as batch:
-        for item in data_items:
-            try:
-                batch.put_item(Item=item)
-                success_count += 1
-            except Exception as e:
-                print(f"Error storing item {item.get('withdrawal_id')}: {e}")
-    
-    # Get new count
-    try:
-        response = table.scan(
-            Select='COUNT'
-        )
-        final_count = response['Count']
-        actual_added = final_count - initial_count
-        print(f"\nDatabase Update Summary:")
-        print(f"Initial count: {initial_count}")
-        print(f"Attempted to add: {len(data_items)}")
-        print(f"Successfully written: {success_count}")
-        print(f"Final count: {final_count}")
-        print(f"Actual new items: {actual_added}")
+        print(f"Successfully stored {len(data_items)} items in DynamoDB")
+        
     except Exception as e:
-        print(f"Error getting final count: {e}")
+        print(f"Error storing data in DynamoDB: {e}")
+        raise
 
 def main():
     print("\n=== Starting Lido Withdrawal Tracker ===\n")
