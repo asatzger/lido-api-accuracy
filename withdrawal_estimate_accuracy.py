@@ -495,99 +495,118 @@ def generate_altair_visualizations(df):
     
     visualizations['error_distribution'] = error_dist_chart
     
-    # 2. Error vs Estimation Lead Time - using actual completion time instead of expected
-    # Calculate days between estimate time and actual completion time
-    df_viz['days_until_actual'] = (df_viz['actual_time'] - df_viz['time_of_estimate']).dt.total_seconds() / (24 * 3600)
+    # 2. Error vs Actual Completion Time - Heatmap Version
+    df_viz_sampled = df_viz.copy()
     
-    # Add hour of estimate to help with sampling
-    df_viz['estimate_hour'] = df_viz['time_of_estimate'].dt.strftime('%Y-%m-%d-%H')
+    # Calculate hours until actual completion from hours_in_advance
+    df_viz_sampled['hours_to_completion'] = df_viz_sampled['hours_in_advance']
     
-    # Select one estimate per withdrawal ID per hour to reduce density
-    df_viz_sampled = df_viz.sort_values('time_of_estimate').groupby(['withdrawal_id', 'estimate_hour']).first().reset_index()
-    print(f"Reduced Error vs Leadtime chart data points from {len(df_viz)} to {len(df_viz_sampled)} (one per withdrawal ID per hour)")
+    # Create bins centered around full hours (-0.5 to +0.5)
+    df_viz_sampled['hours_to_completion_rounded'] = np.floor(df_viz_sampled['hours_to_completion'] + 0.5)
     
-    # Add a small random jitter to better visualize point density
-    df_viz_sampled['error_days_jittered'] = df_viz_sampled['error_days'] + np.random.normal(0, 0.1, size=len(df_viz_sampled))
+    # Create error day bins centered around full days (-0.5 to +0.5)
+    df_viz_sampled['error_day_bin'] = pd.cut(
+        df_viz_sampled['error_days'],
+        bins=np.arange(-3.5, 4.5, 1),  # Creates bins: [-3.5, -2.5), [-2.5, -1.5), ..., [2.5, 3.5)
+        labels=['-3', '-2', '-1', '0', '+1', '+2', '+3']
+    )
     
-    scatter = alt.Chart(df_viz_sampled).mark_circle(opacity=0.7, size=60).encode(
-        x=alt.X('days_until_actual:Q', 
-                title='Days Between Estimate and Actual Completion Time',
-                axis=alt.Axis(titleFontSize=14)),
-        y=alt.Y('error_days_jittered:Q', 
-                title='Error in Days (Positive = Actual later than estimated)',
-                axis=alt.Axis(titleFontSize=14)),
-        tooltip=['withdrawal_id', 
-                alt.Tooltip('error_days_jittered:Q', format='.2f', title='Error (days)'), 
-                alt.Tooltip('days_until_actual:Q', format='.2f', title='Days until actual completion')]
+    # Limit to first 72 hours (3 days) for better visualization
+    df_viz_sampled = df_viz_sampled[df_viz_sampled['hours_to_completion_rounded'] <= 72]
+    
+    # Create a complete grid of all possible hour and error bin combinations
+    hours = np.arange(0, 73)  # 0 to 72 hours
+    error_bins = ['-3', '-2', '-1', '0', '+1', '+2', '+3']
+    
+    # Create meshgrid for hours and error bins
+    hour_grid, error_grid = np.meshgrid(hours, error_bins)
+    
+    # Create the base grid DataFrame
+    grid_data = pd.DataFrame({
+        'hours_to_completion_rounded': hour_grid.ravel(),
+        'error_day_bin': error_grid.ravel()
+    })
+    
+    # Calculate counts for each grid cell
+    counts = (df_viz_sampled.groupby(['hours_to_completion_rounded', 'error_day_bin'])
+             .size()
+             .reset_index(name='count'))
+    
+    # Merge the complete grid with actual counts, filling missing values with 0
+    heatmap_data = pd.merge(grid_data, counts, 
+                           on=['hours_to_completion_rounded', 'error_day_bin'],
+                           how='left').fillna(0)
+    
+    # Calculate percentage within each hour (vertical columns sum to 100%)
+    total_by_hour = heatmap_data.groupby('hours_to_completion_rounded')['count'].sum().reset_index()
+    heatmap_data = heatmap_data.merge(total_by_hour, on='hours_to_completion_rounded', suffixes=('', '_total'))
+    heatmap_data['percentage'] = (heatmap_data['count'] / heatmap_data['count_total'] * 100).round(1)
+    
+    # Create heatmap using rect marks
+    error_heatmap = alt.Chart(heatmap_data).mark_rect().encode(
+        x=alt.X('hours_to_completion_rounded:O',
+                title='Hours Until Actual Completion',
+                axis=alt.Axis(
+                    grid=True,
+                    tickMinStep=1,
+                    titleFontSize=14
+                )),
+        y=alt.Y('error_day_bin:O',
+                title='Error in Days (Actual - Estimated)',
+                axis=alt.Axis(
+                    titleFontSize=14,
+                    grid=True
+                ),
+                sort=['-3', '-2', '-1', '0', '+1', '+2', '+3']),
+        color=alt.Color('percentage:Q',
+                       scale=alt.Scale(
+                           scheme='viridis',
+                           domain=[0, 100],
+                           nice=False
+                       ),
+                       legend=alt.Legend(
+                           title='Percentage of Estimates',
+                           format='.1f'
+                       )),
+        stroke=alt.value('white'),  # Add white borders around cells
+        strokeWidth=alt.value(0.5),  # Set border width
+        tooltip=[
+            alt.Tooltip('hours_to_completion_rounded:Q', title='Hours to Completion', format='.0f'),
+            alt.Tooltip('error_day_bin:N', title='Error Range (Days)'),
+            alt.Tooltip('count:Q', title='Number of Estimates'),
+            alt.Tooltip('percentage:Q', title='Percentage', format='.1f')
+        ]
     ).properties(
-        title=alt.TitleParams(
-            'Estimate Error vs. Lead Time',
-            subtitle='Shows how accuracy varies with how far in advance the estimate was made',
-            fontSize=16
-        ),
+        title={
+            'text': 'Estimation Error Distribution by Time to Completion',
+            'subtitle': [
+                'Heatmap shows distribution of errors for each hour until completion',
+                'Color intensity shows percentage of estimates within each hour (columns sum to 100%)',
+                'Bins are centered around full days (±0.5) and hours (±0.5)',
+                'Positive error: Actual completion later than estimated'
+            ],
+            'fontSize': 16
+        },
         width=900,
         height=400
     )
     
-    # Add a rule for perfect estimate (Error = 0)
-    zero_line = alt.Chart(pd.DataFrame({'y': [0]})).mark_rule(
-        color='red', 
-        strokeDash=[6, 4],
-        strokeWidth=2
-    ).encode(y='y:Q')
-    
-    # Add explanatory text annotations
-    positive_text = alt.Chart(pd.DataFrame({
-        'x': [df_viz_sampled['days_until_actual'].max() * 0.9],
-        'y': [df_viz_sampled['error_days_jittered'].max() * 0.8],
-        'text': ['Actual later than estimated']
-    })).mark_text(fontSize=14, color='#e74c3c', fontWeight='bold').encode(
-        x='x:Q',
-        y='y:Q',
-        text='text:N'
+    error_vs_leadtime_chart = error_heatmap.configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True,
+        gridOpacity=0.2,
+        domain=True,
+        domainWidth=2,
+        tickSize=10,
+        gridColor='white',
+        gridWidth=1
     )
-    
-    negative_text = alt.Chart(pd.DataFrame({
-        'x': [df_viz_sampled['days_until_actual'].max() * 0.9],
-        'y': [df_viz_sampled['error_days_jittered'].min() * 0.8],
-        'text': ['Actual earlier than estimated']
-    })).mark_text(fontSize=14, color='#27ae60', fontWeight='bold').encode(
-        x='x:Q',
-        y='y:Q',
-        text='text:N'
-    )
-    
-    # Add notes explaining chart features
-    gap_note = alt.Chart(pd.DataFrame({
-        'x': [df_viz_sampled['days_until_actual'].max() * 0.5],
-        'y': [df_viz_sampled['error_days_jittered'].min() * 0.5],
-        'text': ['Horizontal gaps represent regular update intervals']
-    })).mark_text(fontSize=12, color='#666666', align='center').encode(
-        x='x:Q',
-        y='y:Q',
-        text='text:N'
-    )
-    
-    jitter_note = alt.Chart(pd.DataFrame({
-        'x': [df_viz_sampled['days_until_actual'].max() * 0.5],
-        'y': [df_viz_sampled['error_days_jittered'].min() * 0.35],
-        'text': ['Points are jittered to better show density']
-    })).mark_text(fontSize=12, color='#666666', align='center').encode(
-        x='x:Q',
-        y='y:Q',
-        text='text:N'
-    )
-    
-    error_vs_leadtime_chart = (scatter + zero_line + positive_text + negative_text)
-    
-    # Store the notes as separate variables to be used in HTML generation
-    leadtime_chart_notes = [
-        "Horizontal gaps represent regular update intervals",
-        "Points are jittered to better show density"
-    ]
     
     visualizations['error_vs_leadtime'] = error_vs_leadtime_chart
-    visualizations['error_vs_leadtime_notes'] = leadtime_chart_notes
+    
+    # Remove the explanatory text since it's now in the subtitle
+    visualizations.pop('error_vs_leadtime_notes', None)
     
     # 4. New: Cumulative accuracy by day difference chart
     # Create a data frame with discrete whole day values (0, 1, 2, 3, etc.)
@@ -706,11 +725,40 @@ def generate_altair_visualizations(df):
     
     visualizations['withdrawal_distribution'] = withdrawal_count_hist
     
-    # 8. Individual withdrawal estimates over time
+    # 8. Individual withdrawal estimates over time - IMPROVED VERSION
     top_tracking_df = analyze_individual_estimates(df)  # Use original df for analysis
     
     # Use a copy to avoid modifying the original
     individual_tracking = top_tracking_df.copy()
+    
+    # Sample data more aggressively - group by 4-hour windows
+    individual_tracking['time_window'] = individual_tracking['time_of_estimate'].dt.floor('4h')
+    
+    # Calculate trajectory length and number of estimates for each withdrawal
+    trajectory_stats = individual_tracking.groupby('withdrawal_id').agg({
+        'time_of_estimate': lambda x: (x.max() - x.min()).total_seconds() / 3600,  # Length in hours
+        'hours_until_estimated': 'count'  # Number of estimates
+    }).reset_index()
+    
+    # Rename columns for clarity
+    trajectory_stats.columns = ['withdrawal_id', 'duration_hours', 'num_estimates']
+    
+    # Get the top 30 withdrawals with longest trajectories and at least 5 estimates
+    top_withdrawal_ids = (trajectory_stats[trajectory_stats['num_estimates'] >= 5]
+                         .nlargest(30, 'duration_hours')
+                         ['withdrawal_id']
+                         .tolist())
+    
+    individual_tracking = individual_tracking[
+        individual_tracking['withdrawal_id'].isin(top_withdrawal_ids)
+    ]
+    
+    # Group by time window
+    individual_tracking = individual_tracking.groupby(['withdrawal_id', 'time_window']).agg({
+        'hours_until_estimated': 'mean',
+        'hours_until_actual': 'mean',
+        'time_of_estimate': 'first'
+    }).reset_index()
     
     # Format datetime columns to ISO format strings
     individual_tracking['time_of_estimate_str'] = individual_tracking['time_of_estimate'].dt.strftime('%Y-%m-%dT%H:%M:%S')
@@ -718,58 +766,67 @@ def generate_altair_visualizations(df):
     individual_tracking['hours_until_estimated'] = individual_tracking['hours_until_estimated'].astype(float)
     individual_tracking['hours_until_actual'] = individual_tracking['hours_until_actual'].astype(float)
     
-    # Create a line chart showing how estimates changed for individual withdrawals
-    # Use hours_until_actual as x-axis instead of time_of_estimate
-    estimates_line = alt.Chart(individual_tracking).mark_line(strokeWidth=3).encode(
-        x=alt.X('hours_until_actual:Q', 
-                title='Hours Until Actual Finalization', 
-                axis=alt.Axis(titleFontSize=14)),
-        y=alt.Y('hours_until_estimated:Q', 
-                title='Hours Until Estimated Finalization', 
-                scale=alt.Scale(zero=False)),
-        color=alt.Color('withdrawal_id:N', title='Withdrawal ID', legend=None),
-        tooltip=['withdrawal_id', 
-                'time_of_estimate_str:T', 
-                alt.Tooltip('hours_until_estimated:Q', title='Estimated hours remaining'),
-                alt.Tooltip('hours_until_actual:Q', title='Actual hours remaining')]
+    # Calculate perfect estimation line data
+    max_hours = max(individual_tracking['hours_until_actual'].max(), 
+                   individual_tracking['hours_until_estimated'].max())
+    perfect_line_data = pd.DataFrame({
+        'x': [0, max_hours],
+        'y': [0, max_hours]
+    })
+    
+    # Create base chart with perfect estimation line
+    perfect_line = alt.Chart(perfect_line_data).mark_line(
+        strokeDash=[6, 4],
+        color='#666666',
+        strokeWidth=1
+    ).encode(
+        x='x:Q',
+        y='y:Q'
+    )
+    
+    # Create main scatter plot with connected lines
+    estimates_scatter = alt.Chart(individual_tracking).mark_line(
+        point=True,  # Add points at each data point
+        strokeWidth=1.5,  # Thinner lines for less visual clutter
+        opacity=0.4  # More transparency for better overlap visibility
+    ).encode(
+        x=alt.X('hours_until_actual:Q',
+                title='Hours Until Actual Finalization',
+                axis=alt.Axis(titleFontSize=12)),
+        y=alt.Y('hours_until_estimated:Q',
+                title='Hours Until Estimated Finalization',
+                axis=alt.Axis(titleFontSize=12)),
+        color=alt.Color('withdrawal_id:N',
+                       legend=None),  # Remove legend
+        tooltip=[
+            alt.Tooltip('withdrawal_id:N', title='Withdrawal ID'),
+            alt.Tooltip('hours_until_estimated:Q', title='Estimated Hours', format='.1f'),
+            alt.Tooltip('hours_until_actual:Q', title='Actual Hours', format='.1f'),
+            alt.Tooltip('time_of_estimate_str:T', title='Time of Estimate')
+        ]
     ).properties(
-        title='Individual Withdrawal Estimates vs Actual Finalization Time',
+        title={
+            'text': 'Individual Withdrawal Estimates vs Actual Time',
+            'subtitle': [
+                'Shows estimation trajectories for top 30 withdrawals with longest estimation periods (min. 5 estimates)',
+                'Points above line: Overestimated time, Points below line: Underestimated time'
+            ],
+            'fontSize': 14,
+            'subtitleFontSize': 12
+        },
         width=900,
         height=500
     )
     
-    # Add reference lines for actual finalization times
-    actual_finalization_refs = []
-    
-    for withdrawal_id in individual_tracking['withdrawal_id'].unique():
-        # Get subset for this withdrawal
-        withdrawal_subset = individual_tracking[individual_tracking['withdrawal_id'] == withdrawal_id]
-        
-        # Calculate average hours until actual 
-        avg_hours_until_actual = withdrawal_subset['hours_until_actual'].mean()
-        
-        # Create reference data for this withdrawal
-        ref_df = pd.DataFrame({
-            'withdrawal_id': [withdrawal_id],
-            'hours_until_actual': [avg_hours_until_actual]
-        })
-        
-        # Create a reference line as a rule
-        ref_line = alt.Chart(ref_df).mark_rule(
-            strokeDash=[6, 4],
-            strokeWidth=2,
-            color='red'
-        ).encode(
-            y='hours_until_actual:Q',
-            color=alt.Color('withdrawal_id:N', legend=None)
-        )
-        
-        actual_finalization_refs.append(ref_line)
-    
-    # Combine main chart with all reference lines
-    individual_chart = estimates_line
-    for ref_line in actual_finalization_refs:
-        individual_chart += ref_line
+    # Combine charts and add configuration
+    individual_chart = (perfect_line + estimates_scatter).configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True,
+        gridOpacity=0.2,
+        labelFontSize=11,
+        titleFontSize=12
+    )
     
     visualizations['individual_estimates'] = individual_chart
     
