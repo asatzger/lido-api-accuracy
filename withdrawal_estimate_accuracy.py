@@ -11,6 +11,7 @@ import pytz
 import base64
 from io import BytesIO
 import argparse
+import re
 
 # Custom JSON encoder that can handle date and datetime objects
 class CustomJSONEncoder(json.JSONEncoder):
@@ -211,15 +212,51 @@ def analyze_estimate_accuracy(test_mode=False, test_limit=10):
         
         # Only include withdrawals with both estimates and actual finalization
         if estimates and actual_finalized_at:
+            # Check for withdrawal type in all records and use the most specific one
+            withdrawal_type = None
+            type_fields = ['type', 'request_type', 'withdrawal_type']
+            
+            # First check the main withdrawal record
+            for field in type_fields:
+                if field in withdrawal and withdrawal[field]:
+                    withdrawal_type = withdrawal[field]
+                    print(f"Found type '{withdrawal_type}' in main record for {withdrawal_id}")
+                    break
+            
+            # If not found, check all history records
+            if not withdrawal_type:
+                for item in history:
+                    for field in type_fields:
+                        if field in item and item[field]:
+                            withdrawal_type = item[field]
+                            print(f"Found type '{withdrawal_type}' in history for {withdrawal_id}")
+                            break
+                    if withdrawal_type:
+                        break
+            
+            # Default to 'unknown' if no type found
+            if not withdrawal_type:
+                print(f"No type found for withdrawal {withdrawal_id}, using 'unknown'")
+                withdrawal_type = 'unknown'
+            
             valid_withdrawals.append({
                 'withdrawal_id': withdrawal_id,
                 'estimates': estimates,
                 'actual_finalized_at': actual_finalized_at,
-                'type': withdrawal.get('type', 'unknown')
+                'type': withdrawal_type
             })
-            print(f"Added withdrawal {withdrawal_id} with {len(estimates)} estimates")
+            print(f"Added withdrawal {withdrawal_id} with {len(estimates)} estimates and type '{withdrawal_type}'")
     
     print(f"Found {len(valid_withdrawals)} withdrawals with valid estimation and finalization data")
+    
+    # Print type distribution
+    type_counts = {}
+    for withdrawal in valid_withdrawals:
+        type_counts[withdrawal['type']] = type_counts.get(withdrawal['type'], 0) + 1
+    
+    print("\nWithdrawal type distribution:")
+    for type_name, count in type_counts.items():
+        print(f"  {type_name}: {count} withdrawals")
     
     # Prepare data for analysis
     analysis_data = []
@@ -261,6 +298,13 @@ def analyze_estimate_accuracy(test_mode=False, test_limit=10):
         return None
     
     print(f"Analysis dataset created with {len(df)} estimation points")
+    
+    # Print withdrawal type distribution in the final dataset
+    print("\nWithdrawal types in final analysis dataset:")
+    type_distribution = df['withdrawal_type'].value_counts()
+    for type_name, count in type_distribution.items():
+        print(f"  {type_name}: {count} data points")
+    
     return df
 
 def analyze_time_of_day(df):
@@ -393,16 +437,30 @@ def calculate_statistics(df):
     
     # Calculate day-based accuracy distribution for cumulative chart
     max_days_error = min(int(df['error_days'].max()) + 1, 10)  # Cap at 10 days
-    accuracy_by_days = []
     
-    for day in range(max_days_error + 1):
-        accuracy = (df['error_days'] < day).mean() * 100
-        accuracy_by_days.append({
-            'days': day,
-            'cumulative_accuracy': accuracy
-        })
+    # Generate data for whole day values
+    accuracy_by_days_df = pd.DataFrame([
+        {"days": day, "cumulative_accuracy": (df['error_days'].abs() < day).mean() * 100}
+        for day in range(max_days_error + 1)
+    ])
     
-    stats['accuracy_by_days'] = accuracy_by_days
+    # Create a line chart showing cumulative accuracy with discrete day values
+    cumulative_accuracy = alt.Chart(accuracy_by_days_df).mark_line(point=True).encode(
+        x=alt.X('days:Q', 
+                title='Days Difference',
+                axis=alt.Axis(values=list(range(max_days_error + 1)), tickMinStep=1),
+                scale=alt.Scale(domain=[0, max_days_error])),
+        y=alt.Y('cumulative_accuracy:Q', 
+                title='Cumulative Percentage of Estimates', 
+                scale=alt.Scale(domain=[0, 100])),
+        tooltip=['days:Q', alt.Tooltip('cumulative_accuracy:Q', title='Cumulative Percentage', format='.1f')]
+    ).properties(
+        title='Cumulative Share of Estimates by Days Difference',
+        width=900,
+        height=400
+    )
+    
+    stats['accuracy_by_days'] = accuracy_by_days_df.to_dict(orient='records')
     
     # Processing pattern statistics
     daily_withdrawals, processing_stats = analyze_batch_processing(df)
@@ -429,6 +487,226 @@ def generate_altair_visualizations(df):
     
     # Add error_days column for day-based visualizations
     df_viz['error_days'] = df_viz['error_hours'] / 24
+    
+    # NEW: Box plot for errors by withdrawal type
+    # Remove any empty or 'unknown' types
+    df_viz_by_type = df_viz[df_viz['withdrawal_type'].notna() & 
+                          (df_viz['withdrawal_type'] != '') & 
+                          (df_viz['withdrawal_type'].str.lower() != 'unknown') &
+                          (df_viz['withdrawal_type'].str.lower() != 'none')]
+    
+    print("\nPreparing withdrawal type data for visualization...")
+    print(f"Original dataset size: {len(df_viz)}")
+    print(f"After filtering empty/unknown types: {len(df_viz_by_type)}")
+    
+    # List all unique withdrawal types
+    all_types = df_viz['withdrawal_type'].unique()
+    print(f"All unique withdrawal types: {all_types}")
+    
+    # Count occurrences of each type
+    type_counts = df_viz_by_type['withdrawal_type'].value_counts().reset_index()
+    type_counts.columns = ['withdrawal_type', 'count']
+    
+    # Print the type counts
+    print("\nCounts for each withdrawal type:")
+    for _, row in type_counts.iterrows():
+        print(f"  {row['withdrawal_type']}: {row['count']} data points")
+    
+    # Only include types with at least 5 data points
+    valid_types = type_counts[type_counts['count'] >= 5]['withdrawal_type'].tolist()
+    print(f"\nValid types with 5+ data points: {valid_types}")
+    
+    if not valid_types:
+        print("WARNING: No valid withdrawal types with 5+ data points found!")
+        error_by_type = alt.Chart(pd.DataFrame({'x': [0], 'y': [0]})).mark_text(
+            text='No withdrawal type data available',
+            fontSize=20
+        ).encode(x='x:Q', y='y:Q').properties(
+            width=900, 
+            height=400,
+            title="Estimation Error by Withdrawal Type"
+        )
+    
+    else:
+        # Filter to valid types
+        df_viz_by_type = df_viz_by_type[df_viz_by_type['withdrawal_type'].isin(valid_types)]
+        print(f"Final dataset for heatmap: {len(df_viz_by_type)} data points")
+        
+        # Create error day bins centered around full days (-0.5 to +0.5)
+        # Similar to the error vs leadtime heatmap
+        df_viz_by_type['error_days'] = df_viz_by_type['error_hours'] / 24
+        
+        min_error = int(np.floor(df_viz_by_type['error_days'].min())) - 0.5
+        max_error = int(np.ceil(df_viz_by_type['error_days'].max())) + 0.5
+        
+        print(f"Setting bin boundaries from {min_error} to {max_error}")
+        
+        # Create bins and labels
+        bins = np.arange(min_error, max_error + 1, 1)
+        
+        # Create numeric labels that can be properly sorted
+        bin_values = list(range(int(min_error + 0.5), int(max_error + 0.5)))
+        raw_labels = [f"{i}" if i < 0 else (f"+{i}" if i > 0 else "0") for i in bin_values]
+        
+        # Create a list of corresponding numeric values for sorting
+        numeric_values = bin_values.copy()
+        
+        # Use the same labels for display
+        display_labels = raw_labels
+        
+        # Create a mapping from raw to display labels
+        label_map = dict(zip(raw_labels, display_labels))
+        
+        # Create explicit manual sort order with 0 in the middle
+        # First place all positive values in descending order
+        positive_labels = [label for label in raw_labels if label.startswith('+')]
+        positive_labels.sort(key=lambda x: float(x.replace('+', '')), reverse=True)
+        
+        # Then place 0
+        zero_label = ['0'] if '0' in raw_labels else []
+        
+        # Then place all negative values in descending order (less negative to more negative)
+        negative_labels = [label for label in raw_labels if label.startswith('-')]
+        negative_labels.sort(key=lambda x: float(x), reverse=True)
+        
+        # Combine them all
+        custom_sort_order = positive_labels + zero_label + negative_labels
+        
+        # Create the bins using raw numeric labels for consistent sorting
+        df_viz_by_type['error_day_bin_raw'] = pd.cut(
+            df_viz_by_type['error_days'],
+            bins=bins,
+            labels=raw_labels,
+            right=False  # Make bins left-inclusive
+        )
+        
+        # Map to display labels
+        df_viz_by_type['error_day_bin'] = df_viz_by_type['error_day_bin_raw'].map(label_map)
+        
+        # Create a complete grid of all possible type and error bin combinations
+        error_bins = display_labels
+        types = valid_types
+        
+        # Create meshgrid for types and error bins
+        type_grid, error_grid = np.meshgrid(types, error_bins)
+        
+        # Create the base grid DataFrame
+        grid_data = pd.DataFrame({
+            'withdrawal_type': type_grid.ravel(),
+            'error_day_bin': error_grid.ravel()
+        })
+        
+        # Calculate counts for each grid cell
+        counts = (df_viz_by_type.groupby(['withdrawal_type', 'error_day_bin'])
+                 .size()
+                 .reset_index(name='count'))
+        
+        # Merge the complete grid with actual counts, filling missing values with 0
+        heatmap_data = pd.merge(grid_data, counts, 
+                               on=['withdrawal_type', 'error_day_bin'],
+                               how='left').fillna(0)
+        
+        # Filter out bins with zero counts for a cleaner visualization
+        heatmap_data = heatmap_data[heatmap_data['count'] > 0]
+        
+        # Calculate percentage within each type (vertical columns sum to 100%)
+        total_by_type = heatmap_data.groupby('withdrawal_type')['count'].sum().reset_index()
+        heatmap_data = heatmap_data.merge(total_by_type, on='withdrawal_type', suffixes=('', '_total'))
+        heatmap_data['percentage'] = (heatmap_data['count'] / heatmap_data['count_total'] * 100).round(1)
+        
+        # Format withdrawal type names for better display
+        heatmap_data['display_type'] = heatmap_data['withdrawal_type'].apply(
+            lambda x: ' '.join(word.capitalize() for word in re.findall(r'[A-Z]?[a-z]+', x))
+            if re.findall(r'[A-Z]?[a-z]+', x) else x
+        )
+        
+        # Define the correct order of withdrawal types
+        type_order = ['buffer', 'vaultsBalance', 'rewardsOnly', 'validatorBalances', 'exitValidators']
+        
+        # Get the available types in our data
+        available_types = heatmap_data['withdrawal_type'].unique().tolist()
+        
+        # Filter and order the types based on the predefined order
+        ordered_types = [t for t in type_order if t in available_types]
+        
+        # Add any types that might be in our data but not in our predefined order
+        for t in available_types:
+            if t not in ordered_types:
+                ordered_types.append(t)
+                
+        # Create a mapping for display types in the same order
+        ordered_display_types = []
+        for t in ordered_types:
+            display = heatmap_data[heatmap_data['withdrawal_type'] == t]['display_type'].iloc[0] if len(heatmap_data[heatmap_data['withdrawal_type'] == t]) > 0 else t
+            ordered_display_types.append(display)
+        
+        # Create heatmap using rect marks
+        error_by_type_chart = alt.Chart(heatmap_data).mark_rect().encode(
+            x=alt.X('display_type:N',
+                    title='Withdrawal Type',
+                    axis=alt.Axis(
+                        labelAngle=-45,
+                        titleFontSize=14
+                    ),
+                    sort=ordered_display_types),  # Use our custom order
+            y=alt.Y('error_day_bin:O',
+                    title='Error (Days)',
+                    axis=alt.Axis(
+                        titleFontSize=14,
+                        grid=True
+                    ),
+                    sort=custom_sort_order),
+            color=alt.Color('percentage:Q',
+                           scale=alt.Scale(
+                               scheme='viridis',
+                               domain=[0, 100],
+                               nice=False
+                           ),
+                           legend=alt.Legend(
+                               title='Percentage of Estimates',
+                               format='.1f'
+                           )),
+            stroke=alt.value('white'),  # Add white borders around cells
+            strokeWidth=alt.value(0.5),  # Set border width
+            tooltip=[
+                alt.Tooltip('display_type:N', title='Withdrawal Type'),
+                alt.Tooltip('error_day_bin:N', title='Error Range'),
+                alt.Tooltip('count:Q', title='Number of Estimates'),
+                alt.Tooltip('percentage:Q', title='Percentage', format='.1f')
+            ]
+        ).properties(
+            title={
+                'text': 'Error by Type',
+                'subtitle': [
+                    'Heatmap shows distribution of errors for each withdrawal type',
+                    'Color intensity shows percentage of estimates within each type',
+                    'Positive values: Actual completion later than estimated',
+                    'Negative values: Actual completion earlier than estimated',
+                    'Withdrawal types represent different mechanisms used to fulfill requests:',
+                    'buffer: using buffered ETH, vaultsBalance: using ETH from vaults,',
+                    'rewardsOnly: using projected rewards, validatorBalances: using scheduled withdrawals,',
+                    'exitValidators: requiring additional validator exits'
+                ],
+                'fontSize': 16
+            },
+            width=900,
+            height=400
+        )
+        
+        # Apply configuration directly to the error_by_type_chart
+        error_by_type = error_by_type_chart.configure_view(
+            strokeWidth=0
+        ).configure_axis(
+            grid=True,
+            gridOpacity=0.2,
+            domain=True,
+            domainWidth=2,
+            tickSize=10,
+            gridColor='white',
+            gridWidth=1
+        )
+    
+    visualizations['error_by_type'] = error_by_type
     
     # 1. Error distribution histogram - one bar per day
     # Round error_days to nearest integer for day-based binning
@@ -1062,7 +1340,7 @@ def generate_html(stats, visualizations):
     
     for i, (title, chart) in enumerate(visualizations.items()):
         # Skip the error_by_type chart and notes
-        if title == 'error_by_type' or title.endswith('_notes'):
+        if title.endswith('_notes'):
             continue
             
         chart_title = ' '.join(word.capitalize() for word in title.split('_'))
