@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lido Withdrawals API - Estimate Accuracy Analysis</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/vega@5.22.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.21.0"></script>
+    <script src="assets/js/charts.js"></script>
+</head>
+<body>
+    <h1>Lido Withdrawals API - Estimate Accuracy Analysis</h1>
+    
+    <div class="intro">
+        <h2>About This Analysis</h2>
+        <p>This analysis evaluates the accuracy of the Lido Withdrawals API's request-time endpoint, which estimates the time to withdrawal finalization for unfinalized stETH redemption requests within the Lido on Ethereum protocol.</p>
+        
+        <h3>Withdrawals API Overview</h3>
+        <p>The Withdrawals API service provides utilities for estimating and tracking withdrawal waiting times in the Lido protocol. It serves two main use cases:</p>
+        <ul>
+            <li>Pre-request estimation: Users can estimate waiting times before placing withdrawal requests</li>
+            <li>Request tracking: Users can monitor estimated waiting times for existing requests</li>
+        </ul>
+        
+        <div class="api-endpoints">
+            <h4>Key Endpoints:</h4>
+            <code>GET https://wq-api.lido.fi/v2/request-time?ids=1&ids=2</code>
+            <p class="note">Calculate time to withdrawal for specific request IDs</p>
+            
+            <code>GET https://wq-api.lido.fi/v2/request-time/calculate</code>
+            <p class="note">Calculate time to withdrawal for current queue</p>
+            
+            <code>GET https://wq-api.lido.fi/v2/request-time/calculate?amount=32</code>
+            <p class="note">Calculate time to withdrawal for specific stETH amount</p>
+            
+            <h4>Testnet (Holesky):</h4>
+            <code>GET https://wq-api-holesky.testnet.fi/v2/request-time?ids=1&ids=2</code>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>Key Statistics</h2>
+        <div class="dashboard">
+            <div class="stat-card">
+                <h3>Overview</h3>
+                <p>Total Withdrawals: <span class="highlight">658</span></p>
+                <p>Total Estimates: <span class="highlight">123818</span></p>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Error Metrics</h3>
+                <p>Mean Error: <span class="highlight">-24.14 hours</span></p>
+                <p>Median Error: <span class="highlight">-23.76 hours</span></p>
+                <p>Mean Absolute Error: <span class="highlight">24.96 hours</span></p>
+                <p class="note">Positive error means actual time was later than estimated</p>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Day-Based Accuracy</h3>
+                <p>Correct Day (±0.5 days): <span class="highlight">45.0%</span></p>
+                <p>Within ±1 day (±1.5 days): <span class="highlight">71.1%</span></p>
+                <p>Within ±2 days (±2.5 days): <span class="highlight">83.3%</span></p>
+                <p>Within ±3 days (±3.5 days): <span class="highlight">96.5%</span></p>
+                <p>Within ±7 days (±7.5 days): <span class="highlight">100.0%</span></p>
+                <p class="note">Each metric shows percentage of estimates within the specified range</p>
+            </div>
+            
+            <div class="stat-card">
+                <h3>Estimate Direction</h3>
+                <p>Early Estimates: <span class="positive">1.2%</span> (actual later than estimated)</p>
+                <p>Late Estimates: <span class="negative">53.8%</span> (actual earlier than estimated)</p>
+                <p class="note">Excludes estimates within ±1 hour of actual time (considered correct)</p>
+            </div>
+
+            <div class="stat-card">
+                <h3>Processing Patterns</h3>
+                <p>Mean Withdrawals per Day: <span class="highlight">94.0</span></p>
+                <p>Median Withdrawals per Day: <span class="highlight">79.0</span></p>
+                <p>Maximum Withdrawals per Day: <span class="highlight">215</span></p>
+                <p>Days with Processing: <span class="highlight">7</span></p>
+                <p class="note">Withdrawals are processed in bulk once per day</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="section">
+        <h2>By Lead Time</h2>
+        <table>
+            <tr>
+                <th>Lead Time</th>
+                <th>Count</th>
+                <th>Mean Error (h)</th>
+                <th>Median Error (h)</th>
+                <th>Mean Abs Error (h)</th>
+            </tr>
+    
+            <tr>
+                <td>0-24h</td>
+                <td>37012</td>
+                <td>0.26</td>
+                <td>0.24</td>
+                <td>0.26</td>
+            </tr>
+        
+            <tr>
+                <td>24-48h</td>
+                <td>16944</td>
+                <td>-7.20</td>
+                <td>0.23</td>
+                <td>7.53</td>
+            </tr>
+        
+            <tr>
+                <td>48-72h</td>
+                <td>18232</td>
+                <td>-23.66</td>
+                <td>-23.76</td>
+                <td>23.76</td>
+            </tr>
+        
+            <tr>
+                <td>72h+</td>
+                <td>51630</td>
+                <td>-47.36</td>
+                <td>-47.76</td>
+                <td>48.82</td>
+            </tr>
+        </table>
+        <div class="visualizations">
+    
+            <div class="chart-container">
+                <h2>Error By Type</h2>
+                <div id="vis0" class="vis-container" data-chart="assets/data/charts/chart_error_by_type.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Completion By Type</h2>
+                <div id="vis1" class="vis-container" data-chart="assets/data/charts/chart_completion_by_type.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Error Distribution</h2>
+                <div id="vis2" class="vis-container" data-chart="assets/data/charts/chart_error_distribution.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Error Vs Leadtime</h2>
+                <div id="vis3" class="vis-container" data-chart="assets/data/charts/chart_error_vs_leadtime.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Error Vs Estimated Leadtime</h2>
+                <div id="vis4" class="vis-container" data-chart="assets/data/charts/chart_error_vs_estimated_leadtime.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Cumulative Accuracy</h2>
+                <div id="vis5" class="vis-container" data-chart="assets/data/charts/chart_cumulative_accuracy.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Daily Processing</h2>
+                <div id="vis6" class="vis-container" data-chart="assets/data/charts/chart_daily_processing.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Withdrawal Distribution</h2>
+                <div id="vis7" class="vis-container" data-chart="assets/data/charts/chart_withdrawal_distribution.json"></div>
+                
+            </div>
+        
+            <div class="chart-container">
+                <h2>Individual Estimates</h2>
+                <div id="vis8" class="vis-container" data-chart="assets/data/charts/chart_individual_estimates.json"></div>
+                
+            </div>
+        </div>
+    <div class="section">
+        <h2>Notes</h2>
+        <ul>
+            <li>Analysis based on withdrawals that have both estimated finalization times and actual finalization times.</li>
+            <li>Positive errors mean that the actual finalization occurred later than estimated.</li>
+            <li>Negative errors mean that the actual finalization occurred earlier than estimated.</li>
+            <li>Data collected from DynamoDB table "lido_withdrawal_requests".</li>
+            <li>Withdrawals are processed in bulk once a day at roughly the same time.</li>
+            <li>Day-based accuracy metrics are more relevant than hour-based metrics due to the once-per-day processing pattern.</li>
+            <li>The processing patterns section focuses on unique withdrawals processed each day, not individual estimates.</li>
+            <li>For "Estimate Direction" statistics, estimates within ±1 hour of actual time are excluded (considered correct).</li>
+            <li>The "true lead time" reference line in the Error vs Leadtime chart shows the theoretical boundary with 24-hour steps.</li>
+            <li>Analysis timestamp: 2025-03-18 15:22:24 UTC</li>
+        </ul>
+    </div>
+    </body></html>
