@@ -1747,7 +1747,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="visualizations">
     """
     
-    # Save each Altair visualization to a separate file
+    # Save each Altair visualization to a separate file - ALL charts are now saved externally
     for i, (title, chart) in enumerate(visualizations.items()):
         # Skip the error_by_type chart and notes
         if title.endswith('_notes'):
@@ -1758,56 +1758,28 @@ document.addEventListener('DOMContentLoaded', function() {
         # Save chart specification to file with the .json extension clearly marked
         chart_filename = f"assets/data/charts/chart_{title}.json"
         
-        # Lists of known problematic charts that need special handling
-        problematic_charts = ['completion_by_type', 'error_distribution']
+        # Save ALL charts to external files
+        with open(chart_filename, "w") as f:
+            # Ensure proper content type with a comment at the top (doesn't affect JSON parsing)
+            f.write(json.dumps(chart.to_dict(), cls=CustomJSONEncoder))
         
-        # Handle problematic charts differently
-        if title in problematic_charts:
-            # For problematic charts, embed the chart data directly in the HTML
-            # This avoids issues with loading external JS files on GitHub Pages
-            chart_html = f"""
-                <div class="chart-container">
-                    <h2>{chart_title}</h2>
-                    <div id="vis{i}" class="vis-container"></div>
-                    <script>
-                        (function() {{
-                            // Directly embed the chart data in the HTML
-                            const chartData = {json.dumps(chart.to_dict(), cls=CustomJSONEncoder)};
-                            
-                            // Render the chart immediately
-                            vegaEmbed('#vis{i}', chartData, {{
-                                mode: "vega-lite",
-                                actions: false,
-                                renderer: "svg"
-                            }});
-                        }})();
-                    </script>
-                </div>
-            """
-            vis_section += chart_html
-        else:
-            # Standard approach for charts that work
-            with open(chart_filename, "w") as f:
-                # Ensure proper content type with a comment at the top (doesn't affect JSON parsing)
-                f.write(json.dumps(chart.to_dict(), cls=CustomJSONEncoder))
-            
-            # Add notes for Error vs Leadtime chart
-            notes_html = ""
-            if title == 'error_vs_leadtime' and f"{title}_notes" in visualizations:
-                notes_html = '<div class="chart-notes"><strong>Notes:</strong><ul>'
-                for note in visualizations[f"{title}_notes"]:
-                    notes_html += f"<li>{note}</li>"
-                notes_html += "</ul></div>"
-            
-            # Reference the external chart file in HTML
-            chart_html = f"""
-                <div class="chart-container">
-                    <h2>{chart_title}</h2>
-                    <div id="vis{i}" class="vis-container" data-chart="{chart_filename}"></div>
-                    {notes_html}
-                </div>
-            """
-            vis_section += chart_html
+        # Add notes for Error vs Leadtime chart
+        notes_html = ""
+        if title == 'error_vs_leadtime' and f"{title}_notes" in visualizations:
+            notes_html = '<div class="chart-notes"><strong>Notes:</strong><ul>'
+            for note in visualizations[f"{title}_notes"]:
+                notes_html += f"<li>{note}</li>"
+            notes_html += "</ul></div>"
+        
+        # Reference the external chart file in HTML
+        chart_html = f"""
+            <div class="chart-container">
+                <h2>{chart_title}</h2>
+                <div id="vis{i}" class="vis-container" data-chart="{chart_filename}"></div>
+                {notes_html}
+            </div>
+        """
+        vis_section += chart_html
     
     vis_section += "</div>"
     

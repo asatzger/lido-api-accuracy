@@ -94,3 +94,12 @@ __pycache__/
 
 # Don't ignore assets directory - required for GitHub Pages
 # assets/
+
+# Ignore temporary files
+*.tmp
+*.temp
+__pycache__/
+*.py[cod]
+
+# Don't ignore assets directory - required for GitHub Pages
+# assets/
