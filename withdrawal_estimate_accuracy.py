@@ -398,15 +398,64 @@ def calculate_statistics(df):
     stats['median_absolute_error'] = df['error_hours'].abs().median()
     
     # Calculate day-based accuracy instead of hour-based
-    # Convert error_hours to days and take absolute value
-    df['error_days'] = df['error_hours'].abs() / 24
+    # Convert error_hours to days but keep the sign (don't take absolute value)
+    df['error_days'] = df['error_hours'] / 24
     
-    # Error ranges by days
-    stats['correct_day'] = (df['error_days'] < 1).mean() * 100  # Less than 1 day difference
-    stats['within_1day'] = (df['error_days'] < 2).mean() * 100  # Less than 2 days difference (i.e., +/- 1 day)
-    stats['within_2days'] = (df['error_days'] < 3).mean() * 100
-    stats['within_3days'] = (df['error_days'] < 4).mean() * 100
-    stats['within_7days'] = (df['error_days'] < 8).mean() * 100
+    # Error ranges by days using absolute values for the comparisons
+    # Changed to use <= operator for more intuitive thresholds
+    stats['correct_day'] = (df['error_days'].abs() <= 0.5).mean() * 100  # Within half a day (same day)
+    stats['within_1day'] = (df['error_days'].abs() <= 1.5).mean() * 100  # Within ±1.5 days
+    stats['within_2days'] = (df['error_days'].abs() <= 2.5).mean() * 100  # Within ±2.5 days
+    stats['within_3days'] = (df['error_days'].abs() <= 3.5).mean() * 100  # Within ±3.5 days
+    stats['within_7days'] = (df['error_days'].abs() <= 7.5).mean() * 100  # Within ±7.5 days
+    
+    # Add more detailed breakdowns at 0.5 day increments
+    stats['within_0.5day'] = (df['error_days'].abs() <= 0.5).mean() * 100
+    stats['within_1.5day'] = (df['error_days'].abs() <= 1.5).mean() * 100
+    stats['within_2.5day'] = (df['error_days'].abs() <= 2.5).mean() * 100
+    stats['within_3.5day'] = (df['error_days'].abs() <= 3.5).mean() * 100
+    stats['within_4day'] = (df['error_days'].abs() <= 4).mean() * 100
+    
+    # Print detailed breakdown of error ranges for debugging
+    print("\nDetailed breakdown of error days:")
+    print(f"Min error days: {df['error_days'].min():.4f}")
+    print(f"Max error days: {df['error_days'].max():.4f}")
+    
+    # Get extreme values
+    extreme_neg = df[df['error_days'] < -3.9].sort_values('error_days')
+    if not extreme_neg.empty:
+        print("\nExtreme negative errors (close to -4 days):")
+        for _, row in extreme_neg.iterrows():
+            print(f"  {row['error_days']:.4f} days, withdrawal_id: {row['withdrawal_id']}")
+    
+    # Show distribution of errors in specific ranges
+    error_ranges = [
+        (-float('inf'), -3.99),
+        (-3.99, -3.9),
+        (-3.9, -3.5),
+        (-3.5, -3.0),
+        (-3.0, -2.0),
+        (-2.0, -1.0),
+        (-1.0, 0.0),
+        (0.0, 1.0),
+        (1.0, 2.0),
+        (2.0, float('inf'))
+    ]
+    
+    print("\nError distribution by ranges:")
+    for lower, upper in error_ranges:
+        if lower == -float('inf'):
+            count = (df['error_days'] < upper).sum()
+            percentage = count / len(df) * 100
+            print(f"  < {upper:.2f} days: {count} estimates ({percentage:.2f}%)")
+        elif upper == float('inf'):
+            count = (df['error_days'] >= lower).sum()
+            percentage = count / len(df) * 100
+            print(f"  >= {lower:.2f} days: {count} estimates ({percentage:.2f}%)")
+        else:
+            count = ((df['error_days'] >= lower) & (df['error_days'] < upper)).sum()
+            percentage = count / len(df) * 100
+            print(f"  {lower:.2f} to {upper:.2f} days: {count} estimates ({percentage:.2f}%)")
     
     # Direction of error - based on all withdrawals
     # For reporting, we still consider estimates within 1 hour of actual as correct
@@ -436,11 +485,11 @@ def calculate_statistics(df):
     ]).rename(columns={'<lambda_0>': 'mean_absolute_error'}).to_dict('index')
     
     # Calculate day-based accuracy distribution for cumulative chart
-    max_days_error = min(int(df['error_days'].max()) + 1, 10)  # Cap at 10 days
+    max_days_error = min(int(df['error_days'].abs().max()) + 1, 10)  # Cap at 10 days
     
     # Generate data for whole day values
     accuracy_by_days_df = pd.DataFrame([
-        {"days": day, "cumulative_accuracy": (df['error_days'].abs() < day).mean() * 100}
+        {"days": day, "cumulative_accuracy": (df['error_days'].abs() <= day).mean() * 100}
         for day in range(max_days_error + 1)
     ])
     
@@ -676,7 +725,7 @@ def generate_altair_visualizations(df):
             ]
         ).properties(
             title={
-                'text': 'Error by Type',
+                'text': 'Error by Estimation Type',
                 'subtitle': [
                     'Heatmap shows distribution of errors for each withdrawal type',
                     'Color intensity shows percentage of estimates within each type',
@@ -707,6 +756,95 @@ def generate_altair_visualizations(df):
         )
     
     visualizations['error_by_type'] = error_by_type
+    
+    # Create box plot of estimated time to completion by withdrawal type
+    # Prepare data for the box plot
+    box_plot_data = df_viz.copy()
+    
+    # Calculate estimated time to completion in hours
+    box_plot_data['estimated_completion_hours'] = (box_plot_data['estimated_time'] - box_plot_data['time_of_estimate']).dt.total_seconds() / 3600
+    
+    # Format withdrawal type names for better display
+    box_plot_data['display_type'] = box_plot_data['withdrawal_type'].apply(
+        lambda x: ' '.join(word.capitalize() for word in re.findall(r'[A-Z]?[a-z]+', x))
+        if re.findall(r'[A-Z]?[a-z]+', x) else x
+    )
+    
+    # Get same ordered types as used in the heatmap
+    type_order = ['buffer', 'vaultsBalance', 'rewardsOnly', 'validatorBalances', 'exitValidators']
+    available_types = box_plot_data['withdrawal_type'].unique().tolist()
+    ordered_types = [t for t in type_order if t in available_types]
+    for t in available_types:
+        if t not in ordered_types:
+            ordered_types.append(t)
+            
+    # Map to display types
+    ordered_display_types = []
+    display_type_map = {}
+    for t in ordered_types:
+        matches = [row['display_type'] for _, row in box_plot_data[box_plot_data['withdrawal_type'] == t].drop_duplicates(['withdrawal_type', 'display_type']).iterrows()]
+        if matches:
+            display = matches[0]
+            ordered_display_types.append(display)
+            display_type_map[t] = display
+    
+    # Create the box plot
+    completion_by_type = alt.Chart(box_plot_data).mark_boxplot(
+        extent='min-max',  # Show whiskers from min to max
+        median={'color': 'white'},  # Make median line stand out
+        size=50  # Adjust box width
+    ).encode(
+        x=alt.X('display_type:N',
+                title='Withdrawal Type',
+                axis=alt.Axis(
+                    labelAngle=-45,
+                    titleFontSize=14
+                ),
+                sort=ordered_display_types),
+        y=alt.Y('estimated_completion_hours:Q',
+                title='Estimated Time to Completion (Hours)',
+                scale=alt.Scale(
+                    zero=False  # Don't force axis to start at zero
+                ),
+                axis=alt.Axis(
+                    titleFontSize=14,
+                    grid=True
+                )),
+        tooltip=[
+            alt.Tooltip('display_type:N', title='Withdrawal Type'),
+            alt.Tooltip('count()', title='Number of Estimates'),
+            alt.Tooltip('min(estimated_completion_hours):Q', title='Minimum (Hours)', format='.1f'),
+            alt.Tooltip('q1(estimated_completion_hours):Q', title='25th Percentile (Hours)', format='.1f'),
+            alt.Tooltip('median(estimated_completion_hours):Q', title='Median (Hours)', format='.1f'),
+            alt.Tooltip('q3(estimated_completion_hours):Q', title='75th Percentile (Hours)', format='.1f'),
+            alt.Tooltip('max(estimated_completion_hours):Q', title='Maximum (Hours)', format='.1f')
+        ]
+    ).properties(
+        title={
+            'text': 'Estimated Time to Completion by Withdrawal Type',
+            'subtitle': [
+                'Box plot shows distribution of estimated completion times for each withdrawal type',
+                'Box represents 25th to 75th percentile, line is median',
+                'Whiskers extend to minimum and maximum values'
+            ],
+            'fontSize': 16
+        },
+        width=900,
+        height=400
+    )
+    
+    # Apply configuration to the box plot
+    completion_by_type_chart = completion_by_type.configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True,
+        gridOpacity=0.2,
+        domain=True,
+        domainWidth=2,
+        tickSize=10
+    )
+    
+    visualizations['completion_by_type'] = completion_by_type_chart
     
     # 1. Error distribution histogram - one bar per day
     # Round error_days to nearest integer for day-based binning
@@ -744,8 +882,8 @@ def generate_altair_visualizations(df):
     # 2. Error vs Actual Completion Time - Heatmap Version
     df_viz_sampled = df_viz.copy()
     
-    # Calculate hours until actual completion from hours_in_advance
-    df_viz_sampled['hours_to_completion'] = df_viz_sampled['hours_in_advance']
+    # Calculate hours until actual completion
+    df_viz_sampled['hours_to_completion'] = (df_viz_sampled['actual_time'] - df_viz_sampled['time_of_estimate']).dt.total_seconds() / 3600
     
     # Create bins centered around full hours (-0.5 to +0.5)
     df_viz_sampled['hours_to_completion_rounded'] = np.floor(df_viz_sampled['hours_to_completion'] + 0.5)
@@ -875,13 +1013,123 @@ def generate_altair_visualizations(df):
     # Remove the explanatory text since it's now in the subtitle
     visualizations.pop('error_vs_leadtime_notes', None)
     
+    # 3. NEW: Error vs Estimated Completion Time - Heatmap Version
+    # Calculate hours until estimated completion
+    df_viz_sampled['hours_to_estimated_completion'] = (df_viz_sampled['estimated_time'] - df_viz_sampled['time_of_estimate']).dt.total_seconds() / 3600
+    
+    # Create bins centered around full hours (-0.5 to +0.5)
+    df_viz_sampled['hours_to_estimated_completion_rounded'] = np.floor(df_viz_sampled['hours_to_estimated_completion'] + 0.5)
+    
+    # Print info about estimated completion times
+    print(f"\nEstimated completion time ranges:")
+    print(f"Min hours to estimated completion: {df_viz_sampled['hours_to_estimated_completion'].min():.2f}")
+    print(f"Max hours to estimated completion: {df_viz_sampled['hours_to_estimated_completion'].max():.2f}")
+    
+    # Get the maximum hours to estimated completion (rounded up to nearest day in hours)
+    max_est_hours = int(np.ceil(df_viz_sampled['hours_to_estimated_completion'].max() / 24) * 24)
+    
+    # Create a complete grid of all possible hour and error bin combinations
+    est_hours = np.arange(0, max_est_hours + 1)  # Include all hours
+    
+    # Create meshgrid for hours and error bins
+    est_hour_grid, error_grid = np.meshgrid(est_hours, error_bins)
+    
+    # Create the base grid DataFrame
+    est_grid_data = pd.DataFrame({
+        'hours_to_estimated_completion_rounded': est_hour_grid.ravel(),
+        'error_day_bin': error_grid.ravel()
+    })
+    
+    # Calculate counts for each grid cell
+    est_counts = (df_viz_sampled.groupby(['hours_to_estimated_completion_rounded', 'error_day_bin'])
+                 .size()
+                 .reset_index(name='count'))
+    
+    # Merge the complete grid with actual counts, filling missing values with 0
+    est_heatmap_data = pd.merge(est_grid_data, est_counts, 
+                               on=['hours_to_estimated_completion_rounded', 'error_day_bin'],
+                               how='left').fillna(0)
+    
+    # Filter out bins with zero counts
+    est_heatmap_data = est_heatmap_data[est_heatmap_data['count'] > 0]
+    
+    # Calculate percentage within each hour (vertical columns sum to 100%)
+    est_total_by_hour = est_heatmap_data.groupby('hours_to_estimated_completion_rounded')['count'].sum().reset_index()
+    est_heatmap_data = est_heatmap_data.merge(est_total_by_hour, on='hours_to_estimated_completion_rounded', suffixes=('', '_total'))
+    est_heatmap_data['percentage'] = (est_heatmap_data['count'] / est_heatmap_data['count_total'] * 100).round(1)
+    
+    # Create heatmap using rect marks
+    error_vs_est_heatmap = alt.Chart(est_heatmap_data).mark_rect().encode(
+        x=alt.X('hours_to_estimated_completion_rounded:O',
+                title='Hours Until Estimated Completion',
+                axis=alt.Axis(
+                    grid=True,
+                    values=list(range(0, max_est_hours + 1, 6)),  # Only show labels every 6 hours
+                    labelAngle=0,
+                    titleFontSize=14
+                )),
+        y=alt.Y('error_day_bin:O',
+                title='Error in Days (Actual - Estimated)',
+                axis=alt.Axis(
+                    titleFontSize=14,
+                    grid=True
+                ),
+                sort=labels),  # Use the dynamically generated labels for sorting
+        color=alt.Color('percentage:Q',
+                       scale=alt.Scale(
+                           scheme='viridis',
+                           domain=[0, 100],
+                           nice=False
+                       ),
+                       legend=alt.Legend(
+                           title='Percentage of Estimates',
+                           format='.1f'
+                       )),
+        stroke=alt.value('white'),  # Add white borders around cells
+        strokeWidth=alt.value(0.5),  # Set border width
+        tooltip=[
+            alt.Tooltip('hours_to_estimated_completion_rounded:Q', title='Hours to Estimated Completion', format='.0f'),
+            alt.Tooltip('error_day_bin:N', title='Error Range (Days)'),
+            alt.Tooltip('count:Q', title='Number of Estimates'),
+            alt.Tooltip('percentage:Q', title='Percentage', format='.1f')
+        ]
+    ).properties(
+        title={
+            'text': 'Estimation Error Distribution by Time to Estimated Completion',
+            'subtitle': [
+                'Heatmap shows distribution of errors for each hour until estimated completion',
+                'Color intensity shows percentage of estimates within each hour (columns sum to 100%)',
+                'Bins are centered around full days (±0.5) and hours (±0.5)',
+                'Positive error: Actual completion later than estimated',
+                'Only bins with actual data are shown'
+            ],
+            'fontSize': 16
+        },
+        width=900,
+        height=400
+    )
+    
+    error_vs_est_leadtime_chart = error_vs_est_heatmap.configure_view(
+        strokeWidth=0
+    ).configure_axis(
+        grid=True,
+        gridOpacity=0.2,
+        domain=True,
+        domainWidth=2,
+        tickSize=10,
+        gridColor='white',
+        gridWidth=1
+    )
+    
+    visualizations['error_vs_estimated_leadtime'] = error_vs_est_leadtime_chart
+    
     # 4. New: Cumulative accuracy by day difference chart
     # Create a data frame with discrete whole day values (0, 1, 2, 3, etc.)
     max_days_error = min(int(df_viz['error_days'].abs().max()) + 1, 10)  # Cap at 10 days
     
     # Generate data for whole day values
     accuracy_by_days_df = pd.DataFrame([
-        {"days": day, "cumulative_accuracy": (df_viz['error_days'].abs() < day).mean() * 100}
+        {"days": day, "cumulative_accuracy": (df_viz['error_days'].abs() <= day).mean() * 100}
         for day in range(max_days_error + 1)
     ])
     
@@ -1255,11 +1503,12 @@ def generate_html(stats, visualizations):
             
             <div class="stat-card">
                 <h3>Day-Based Accuracy</h3>
-                <p>Correct Day: <span class="highlight">{correct_day:.1f}%</span></p>
-                <p>Within ±1 day: <span class="highlight">{within_1day:.1f}%</span></p>
-                <p>Within ±2 days: <span class="highlight">{within_2days:.1f}%</span></p>
-                <p>Within ±3 days: <span class="highlight">{within_3days:.1f}%</span></p>
-                <p>Within ±7 days: <span class="highlight">{within_7days:.1f}%</span></p>
+                <p>Correct Day (±0.5 days): <span class="highlight">{correct_day:.1f}%</span></p>
+                <p>Within ±1 day (±1.5 days): <span class="highlight">{within_1day:.1f}%</span></p>
+                <p>Within ±2 days (±2.5 days): <span class="highlight">{within_2days:.1f}%</span></p>
+                <p>Within ±3 days (±3.5 days): <span class="highlight">{within_3days:.1f}%</span></p>
+                <p>Within ±7 days (±7.5 days): <span class="highlight">{within_7days:.1f}%</span></p>
+                <p class="note">Each metric shows percentage of estimates within the specified range</p>
             </div>
             
             <div class="stat-card">
