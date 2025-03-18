@@ -1001,17 +1001,6 @@ def generate_html(stats, visualizations):
             </div>
         </div>
     </div>
-
-    <div class="section">
-        <h2>By Lead Time</h2>
-        <table>
-            <tr>
-                <th>Lead Time</th>
-                <th>Count</th>
-                <th>Mean Error (h)</th>
-                <th>Median Error (h)</th>
-                <th>Mean Abs Error (h)</th>
-            </tr>
     """
     
     # Format the HTML header with statistics
@@ -1036,6 +1025,8 @@ def generate_html(stats, visualizations):
     
     # Table for lead time groups
     lead_time_table = """
+    <div class="section">
+        <h2>By Lead Time</h2>
         <table>
             <tr>
                 <th>Lead Time</th>
@@ -1150,9 +1141,7 @@ def generate_html(stats, visualizations):
     js_section += "</script></body></html>"
     
     # Combine all sections - remove type_table
-    full_html = formatted_header + """
-    <h2>By Lead Time</h2>
-    """ + lead_time_table + vis_section + footer + js_section
+    full_html = formatted_header + lead_time_table + vis_section + footer + js_section
     
     return full_html
 
