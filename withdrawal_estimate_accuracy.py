@@ -1478,26 +1478,81 @@ function loadChartWhenVisible(elemId, chartPath) {
         // Show loading indicator
         element.innerHTML = '<div class="loading">Loading chart...</div>';
         
-        // Fetch and render chart
-        fetch(chartPath)
-            .then(response => response.json())
-            .then(spec => {
-                vegaEmbed('#' + elemId, spec, {
-                    mode: "vega-lite",
-                    actions: false,
-                    renderer: "svg",
-                    logLevel: 'info'
-                }).catch(error => {
-                    console.error('Error rendering chart', elemId, error);
+        // Add cache-busting parameter to avoid caching issues
+        const cacheBuster = '?t=' + new Date().getTime();
+        
+        // Ensure correct content-type handling
+        const options = {
+            headers: {
+                'Accept': 'application/json',
+                'Content-Type': 'application/json'
+            },
+            credentials: 'omit'  // Skip credentials for cross-origin requests
+        };
+        
+        // Identify file extension to determine handling
+        const isJavaScript = chartPath.endsWith('.js');
+        
+        if (isJavaScript) {
+            // For JavaScript files, load via script tag
+            const script = document.createElement('script');
+            script.src = chartPath + cacheBuster;
+            script.onload = () => {
+                // The script will define its own loading logic
+                console.log(`JavaScript chart loaded: ${chartPath}`);
+            };
+            script.onerror = (error) => {
+                console.error(`Error loading JavaScript chart: ${chartPath}`, error);
+                element.innerHTML = `<p style="color:red">Error loading chart script: ${chartPath}</p>`;
+            };
+            document.head.appendChild(script);
+        } else {
+            // For JSON files, fetch the data
+            console.log('Loading chart from:', chartPath + cacheBuster);
+            
+            fetch(chartPath + cacheBuster, options)
+                .then(response => {
+                    if (!response.ok) {
+                        throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+                    }
+                    const contentType = response.headers.get('content-type') || '';
+                    if (!contentType.includes('application/json') && !contentType.includes('text/plain')) {
+                        console.warn(`Unexpected content type: ${contentType}`);
+                    }
+                    return response.text();
+                })
+                .then(text => {
+                    try {
+                        // Try to parse JSON from the text response
+                        const spec = JSON.parse(text);
+                        vegaEmbed('#' + elemId, spec, {
+                            mode: "vega-lite", 
+                            actions: false,
+                            renderer: "svg",
+                            logLevel: 'info'
+                        }).catch(error => {
+                            console.error('Error rendering chart', elemId, error);
+                            element.innerHTML = 
+                                '<p style="color:red">Error rendering chart: ' + error.message + '</p>';
+                        });
+                    } catch (e) {
+                        console.error('JSON parse error:', e, 'Response starts with:', text.substring(0, 50));
+                        if (text.trim().startsWith('<')) {
+                            // Received HTML instead of JSON - likely a 404 page
+                            element.innerHTML = 
+                                '<p style="color:red">Error: Received HTML instead of JSON. File may be missing or path may be incorrect.</p>';
+                        } else {
+                            element.innerHTML = 
+                                '<p style="color:red">Error parsing chart data: ' + e.message + '</p>';
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Network error loading chart', elemId, error);
                     element.innerHTML = 
-                        '<p style="color:red">Error rendering chart: ' + error.message + '</p>';
+                        '<p style="color:red">Error loading chart data: ' + error.message + '</p>';
                 });
-            })
-            .catch(error => {
-                console.error('Error loading chart', elemId, error);
-                element.innerHTML = 
-                    '<p style="color:red">Error loading chart data: ' + error.message + '</p>';
-            });
+        }
         
         // Remove from charts to load array
         chartsToLoad = chartsToLoad.filter(chart => chart.id !== elemId);
@@ -1699,29 +1754,61 @@ document.addEventListener('DOMContentLoaded', function() {
             continue
             
         chart_title = ' '.join(word.capitalize() for word in title.split('_'))
+        
+        # Save chart specification to file with the .json extension clearly marked
         chart_filename = f"assets/data/charts/chart_{title}.json"
         
-        # Save chart specification to file
-        with open(chart_filename, "w") as f:
-            json.dump(chart.to_dict(), f, cls=CustomJSONEncoder)
+        # Lists of known problematic charts that need special handling
+        problematic_charts = ['completion_by_type', 'error_distribution']
         
-        # Add notes for Error vs Leadtime chart
-        notes_html = ""
-        if title == 'error_vs_leadtime' and f"{title}_notes" in visualizations:
-            notes_html = '<div class="chart-notes"><strong>Notes:</strong><ul>'
-            for note in visualizations[f"{title}_notes"]:
-                notes_html += f"<li>{note}</li>"
-            notes_html += "</ul></div>"
-        
-        # Reference the external chart file in HTML
-        chart_html = f"""
-            <div class="chart-container">
-                <h2>{chart_title}</h2>
-                <div id="vis{i}" class="vis-container" data-chart="{chart_filename}"></div>
-                {notes_html}
-            </div>
-        """
-        vis_section += chart_html
+        # Handle problematic charts differently
+        if title in problematic_charts:
+            # For problematic charts, create a JavaScript file with embedded data
+            js_chart_filename = f"assets/data/charts/chart_{title}.js"
+            with open(js_chart_filename, "w") as f:
+                f.write(f'const chartData_{title} = {json.dumps(chart.to_dict(), cls=CustomJSONEncoder)};')
+            
+            # Reference the JavaScript file instead of JSON
+            chart_html = f"""
+                <div class="chart-container">
+                    <h2>{chart_title}</h2>
+                    <div id="vis{i}" class="vis-container"></div>
+                    <script src="{js_chart_filename}"></script>
+                    <script>
+                        document.addEventListener('DOMContentLoaded', function() {{
+                            vegaEmbed('#vis{i}', chartData_{title}, {{
+                                mode: "vega-lite",
+                                actions: false,
+                                renderer: "svg"
+                            }});
+                        }});
+                    </script>
+                </div>
+            """
+            vis_section += chart_html
+        else:
+            # Standard approach for charts that work
+            with open(chart_filename, "w") as f:
+                # Ensure proper content type with a comment at the top (doesn't affect JSON parsing)
+                f.write(json.dumps(chart.to_dict(), cls=CustomJSONEncoder))
+            
+            # Add notes for Error vs Leadtime chart
+            notes_html = ""
+            if title == 'error_vs_leadtime' and f"{title}_notes" in visualizations:
+                notes_html = '<div class="chart-notes"><strong>Notes:</strong><ul>'
+                for note in visualizations[f"{title}_notes"]:
+                    notes_html += f"<li>{note}</li>"
+                notes_html += "</ul></div>"
+            
+            # Reference the external chart file in HTML
+            chart_html = f"""
+                <div class="chart-container">
+                    <h2>{chart_title}</h2>
+                    <div id="vis{i}" class="vis-container" data-chart="{chart_filename}"></div>
+                    {notes_html}
+                </div>
+            """
+            vis_section += chart_html
     
     vis_section += "</div>"
     

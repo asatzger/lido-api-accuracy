@@ -21,10 +21,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         
       - name: Setup Pages
-        uses: actions/configure-pages@v3
+        uses: actions/configure-pages@v4
         
       # List the files being deployed for verification
       - name: List files to be deployed
@@ -36,12 +36,22 @@ jobs:
           echo "\nAssets charts directory:"
           ls -la assets/data/charts/ || echo "Charts directory not found"
         
+      # Explicitly include the upload-artifact action
+      - name: Setup upload-artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: github-pages
+          path: |
+            index.html
+            assets/**
+          retention-days: 1
+        
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@v1
+        uses: actions/upload-pages-artifact@v2
         with:
           # Upload the entire repository to include assets directory
           path: '.'
           
       - name: Deploy to GitHub Pages
         id: deployment
-        uses: actions/deploy-pages@v2 
+        uses: actions/deploy-pages@v3 
