@@ -1,8 +1,8 @@
 name: Pages
 
 on:
-  # Not triggered directly - the daily-analysis workflow will call deploy-pages
-  workflow_dispatch:  # But can be triggered manually if needed
+  # Can be triggered by daily-analysis workflow or manually
+  workflow_dispatch:
 
 # Sets permissions of the GITHUB_TOKEN to allow deployment to GitHub Pages
 permissions:
@@ -22,13 +22,26 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+        
       - name: Setup Pages
         uses: actions/configure-pages@v3
+        
+      # List the files being deployed for verification
+      - name: List files to be deployed
+        run: |
+          echo "Files to be deployed to GitHub Pages:"
+          ls -la
+          echo "\nAssets directory:"
+          ls -la assets/ || echo "Assets directory not found"
+          echo "\nAssets charts directory:"
+          ls -la assets/data/charts/ || echo "Charts directory not found"
+        
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v1
         with:
-          # Just upload the index.html file
+          # Upload the entire repository to include assets directory
           path: '.'
+          
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v2 

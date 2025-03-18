@@ -1324,85 +1324,80 @@ def generate_altair_visualizations(df):
 def generate_html(stats, visualizations):
     """Generate HTML for the static page with Altair visualizations"""
     
-    # HTML header with Vega-Lite and Vega-Embed libraries for Altair charts
-    html_header = """<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Lido Withdrawals API - Estimate Accuracy Analysis</title>
-    <script src="https://cdn.jsdelivr.net/npm/vega@5.22.1"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.6.0"></script>
-    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.21.0"></script>
-    <style>
-        body {{
+    # Create directory structure for assets
+    os.makedirs("assets/css", exist_ok=True)
+    os.makedirs("assets/js", exist_ok=True)
+    os.makedirs("assets/data/charts", exist_ok=True)
+    
+    # Extract CSS to external file
+    css_content = """body {
             font-family: Arial, sans-serif;
             line-height: 1.6;
             color: #333;
             max-width: 1200px;
             margin: 0 auto;
             padding: 20px;
-        }}
-        h1, h2, h3 {{
+        }
+        h1, h2, h3 {
             color: #2c3e50;
-        }}
-        .intro {{
+        }
+        .intro {
             background-color: #f8f9fa;
             border-radius: 8px;
             padding: 20px;
             margin-bottom: 30px;
             box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
-        }}
-        .intro h2 {{
+        }
+        .intro h2 {
             margin-top: 0;
             color: #34495e;
-        }}
-        .intro p {{
+        }
+        .intro p {
             margin-bottom: 10px;
-        }}
-        .api-endpoints {{
+        }
+        .api-endpoints {
             background-color: #f1f3f5;
             padding: 15px;
             border-radius: 6px;
             margin: 10px 0;
-        }}
-        .api-endpoints code {{
+        }
+        .api-endpoints code {
             display: block;
             background-color: #fff;
             padding: 8px;
             margin: 5px 0;
             border-radius: 4px;
             font-family: monospace;
-        }}
-        .dashboard {{
+        }
+        .dashboard {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
             gap: 20px;
             margin-bottom: 40px;
-        }}
-        .stat-card {{
+        }
+        .stat-card {
             background-color: #f8f9fa;
             border-radius: 8px;
             padding: 15px;
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }}
-        .visualizations {{
+        }
+        .visualizations {
             display: grid;
             grid-template-columns: 1fr;
             gap: 30px;
             margin-top: 40px;
-        }}
-        .side-by-side-sections {{
+        }
+        .side-by-side-sections {
             display: flex;
             justify-content: space-between;
             gap: 20px;
             margin-bottom: 40px;
-        }}
-        .half-section {{
+        }
+        .half-section {
             flex: 1;
             max-width: 48%;
-        }}
-        .chart-container {{
+        }
+        .chart-container {
             background-color: white;
             border-radius: 8px;
             padding: 15px;
@@ -1412,47 +1407,160 @@ def generate_html(stats, visualizations):
             width: 100%;
             overflow: hidden;
             margin-bottom: 30px;
-        }}
-        .vis-container {{
+        }
+        .vis-container {
             width: 100%;
             height: 100%;
             min-height: 400px;
-        }}
-        table {{
+        }
+        table {
             width: 100%;
             border-collapse: collapse;
             margin: 20px 0;
-        }}
-        th, td {{
+        }
+        th, td {
             padding: 12px 15px;
             text-align: left;
             border-bottom: 1px solid #ddd;
-        }}
-        th {{
+        }
+        th {
             background-color: #f2f2f2;
-        }}
-        tr:hover {{
+        }
+        tr:hover {
             background-color: #f5f5f5;
-        }}
-        .highlight {{
+        }
+        .highlight {
             font-weight: bold;
             color: #2980b9;
-        }}
-        .positive {{
+        }
+        .positive {
             color: #e74c3c;
-        }}
-        .negative {{
+        }
+        .negative {
             color: #27ae60;
-        }}
-        .note {{
+        }
+        .note {
             font-style: italic;
             color: #7f8c8d;
             margin-top: 8px;
-        }}
-        .section {{
+        }
+        .section {
             margin-bottom: 40px;
-        }}
-    </style>
+        }
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 200px;
+            font-style: italic;
+            color: #7f8c8d;
+        }"""
+    
+    # Write CSS to file
+    with open("assets/css/styles.css", "w") as f:
+        f.write(css_content)
+    
+    # Create JavaScript for lazy loading charts
+    js_content = """// Function to check if element is in viewport
+function isInViewport(element) {
+    const rect = element.getBoundingClientRect();
+    return (
+        rect.top <= (window.innerHeight || document.documentElement.clientHeight) &&
+        rect.bottom >= 0
+    );
+}
+
+// Load chart when in viewport
+function loadChartWhenVisible(elemId, chartPath) {
+    const element = document.getElementById(elemId);
+    
+    if (isInViewport(element)) {
+        // Show loading indicator
+        element.innerHTML = '<div class="loading">Loading chart...</div>';
+        
+        // Fetch and render chart
+        fetch(chartPath)
+            .then(response => response.json())
+            .then(spec => {
+                vegaEmbed('#' + elemId, spec, {
+                    mode: "vega-lite",
+                    actions: false,
+                    renderer: "svg",
+                    logLevel: 'info'
+                }).catch(error => {
+                    console.error('Error rendering chart', elemId, error);
+                    element.innerHTML = 
+                        '<p style="color:red">Error rendering chart: ' + error.message + '</p>';
+                });
+            })
+            .catch(error => {
+                console.error('Error loading chart', elemId, error);
+                element.innerHTML = 
+                    '<p style="color:red">Error loading chart data: ' + error.message + '</p>';
+            });
+        
+        // Remove from charts to load array
+        chartsToLoad = chartsToLoad.filter(chart => chart.id !== elemId);
+        
+        return true;
+    }
+    
+    return false;
+}
+
+// Initialize array of charts to load
+let chartsToLoad = [];
+
+// Check visible charts on load and scroll
+function checkVisibleCharts() {
+    // Make a copy of the array since we'll be modifying it
+    const currentCharts = [...chartsToLoad];
+    
+    // Try to load each chart if visible
+    currentCharts.forEach(chart => {
+        loadChartWhenVisible(chart.id, chart.path);
+    });
+    
+    // If all charts loaded, remove scroll listener
+    if (chartsToLoad.length === 0) {
+        window.removeEventListener('scroll', checkVisibleCharts);
+    }
+}
+
+// Initialize charts on page load
+document.addEventListener('DOMContentLoaded', function() {
+    // Find all chart containers
+    document.querySelectorAll('[data-chart]').forEach(container => {
+        // Add to charts to load
+        chartsToLoad.push({
+            id: container.id,
+            path: container.getAttribute('data-chart')
+        });
+    });
+    
+    // Initial check for visible charts
+    checkVisibleCharts();
+    
+    // Add scroll listener to check for visible charts
+    window.addEventListener('scroll', checkVisibleCharts);
+});"""
+    
+    # Write JavaScript to file
+    with open("assets/js/charts.js", "w") as f:
+        f.write(js_content)
+    
+    # HTML header with external CSS and JS references
+    html_header = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Lido Withdrawals API - Estimate Accuracy Analysis</title>
+    <link rel="stylesheet" href="assets/css/styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/vega@5.22.1"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-lite@5.6.0"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vega-embed@6.21.0"></script>
+    <script src="assets/js/charts.js"></script>
 </head>
 <body>
     <h1>Lido Withdrawals API - Estimate Accuracy Analysis</h1>
@@ -1579,20 +1687,23 @@ def generate_html(stats, visualizations):
     
     lead_time_table += "</table>"
     
-    # Visualizations section with Altair charts
+    # Visualizations section with references to external chart files
     vis_section = """
         <div class="visualizations">
     """
     
-    # Add each Altair visualization - prepare chart specs but don't embed yet
-    chart_specs = {}
-    
+    # Save each Altair visualization to a separate file
     for i, (title, chart) in enumerate(visualizations.items()):
         # Skip the error_by_type chart and notes
         if title.endswith('_notes'):
             continue
             
         chart_title = ' '.join(word.capitalize() for word in title.split('_'))
+        chart_filename = f"assets/data/charts/chart_{title}.json"
+        
+        # Save chart specification to file
+        with open(chart_filename, "w") as f:
+            json.dump(chart.to_dict(), f, cls=CustomJSONEncoder)
         
         # Add notes for Error vs Leadtime chart
         notes_html = ""
@@ -1602,17 +1713,15 @@ def generate_html(stats, visualizations):
                 notes_html += f"<li>{note}</li>"
             notes_html += "</ul></div>"
         
+        # Reference the external chart file in HTML
         chart_html = f"""
             <div class="chart-container">
                 <h2>{chart_title}</h2>
-                <div id="vis{i}" class="vis-container"></div>
+                <div id="vis{i}" class="vis-container" data-chart="{chart_filename}"></div>
                 {notes_html}
             </div>
         """
         vis_section += chart_html
-        
-        # Convert to spec dict
-        chart_specs[f"vis{i}"] = chart.to_dict()
     
     vis_section += "</div>"
     
@@ -1635,40 +1744,8 @@ def generate_html(stats, visualizations):
     </div>
     """
     
-    # JavaScript to render the visualizations - simpler embedding approach
-    js_section = "<script>"
-    
-    # Add chart specs as a global variable
-    specs_json = json.dumps(chart_specs, cls=CustomJSONEncoder)
-    js_section += f"""
-    // Chart specifications
-    const chartSpecs = {specs_json};
-    
-    // Function to render all charts
-    function renderCharts() {{
-        // Render each chart
-        Object.keys(chartSpecs).forEach(function(elemId) {{
-            vegaEmbed('#' + elemId, chartSpecs[elemId], {{
-                mode: "vega-lite",
-                actions: false,
-                renderer: "svg",
-                logLevel: 'info'
-            }}).catch(function(error) {{
-                console.error('Error rendering chart', elemId, error);
-                document.getElementById(elemId).innerHTML = 
-                    '<p style="color:red">Error rendering chart: ' + error.message + '</p>';
-            }});
-        }});
-    }}
-    
-    // Render charts when page loads
-    document.addEventListener('DOMContentLoaded', renderCharts);
-    """
-    
-    js_section += "</script></body></html>"
-    
-    # Combine all sections - remove type_table
-    full_html = formatted_header + lead_time_table + vis_section + footer + js_section
+    # Combine all sections
+    full_html = formatted_header + lead_time_table + vis_section + footer + "</body></html>"
     
     return full_html
 
@@ -1697,8 +1774,8 @@ def main():
     print("Generating Altair visualizations...")
     visualizations = generate_altair_visualizations(df)
     
-    # Generate HTML
-    print("Creating HTML report...")
+    # Generate HTML and assets
+    print("Creating HTML report and asset files...")
     html = generate_html(stats, visualizations)
     
     # Save HTML to file
@@ -1706,8 +1783,91 @@ def main():
     with open(output_file, "w") as f:
         f.write(html)
     
+    # Create .gitignore to exclude specific asset types if needed
+    gitignore_content = """
+# Ignore temporary files
+*.tmp
+*.temp
+__pycache__/
+*.py[cod]
+
+# Don't ignore assets directory - required for GitHub Pages
+# assets/
+"""
+    
+    with open(".gitignore", "a") as f:
+        f.write(gitignore_content)
+    
+    # Create .github/workflows/daily-analysis.yml if running in GitHub Actions
+    if os.environ.get('GITHUB_ACTIONS') == 'true':
+        # Ensure directory exists
+        os.makedirs(".github/workflows", exist_ok=True)
+        
+        workflow_content = """name: Daily Analysis
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Run daily at midnight UTC
+  workflow_dispatch:      # Allow manual triggering
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v3
+        
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+          
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Run withdrawal analysis
+        run: python withdrawal_estimate_accuracy.py
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+
+      - name: Commit and push updated files
+        run: |
+          git config --local user.email "github-actions[bot]@users.noreply.github.com"
+          git config --local user.name "github-actions[bot]"
+          git add index.html
+          git add assets/
+          git diff --staged --quiet || git commit -m "Update withdrawal analysis report [automated]" -m "Daily update triggered by GitHub Actions"
+          git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
+          
+      # This step explicitly triggers the GitHub Pages build
+      - name: Trigger GitHub Pages build
+        run: |
+          curl -X POST \\
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \\
+            -H "Accept: application/vnd.github.v3+json" \\
+            https://api.github.com/repos/${{ github.repository }}/pages/builds
+"""
+        
+        with open(".github/workflows/daily-analysis.yml", "w") as f:
+            f.write(workflow_content)
+    
     print(f"Analysis complete! Results saved to {output_file}")
-    print(f"You can now host this file on GitHub Pages.")
+    print(f"Created directory structure with externalized assets:")
+    print(f" - assets/css/styles.css: Contains all CSS styles")
+    print(f" - assets/js/charts.js: Contains chart loading logic")
+    print(f" - assets/data/charts/: Contains all chart specifications as JSON files")
+    print(f"You can now host these files on GitHub Pages.")
 
 if __name__ == "__main__":
     main() 

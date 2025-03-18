@@ -13,6 +13,7 @@ jobs:
     permissions:
       contents: write
       pages: write
+      id-token: write
       
     steps:
       - name: Checkout code
@@ -47,19 +48,33 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_REGION: ${{ secrets.AWS_REGION }}
+          GITHUB_ACTIONS: 'true'  # Explicitly set for the script to detect
 
-      - name: Commit and push updated HTML
+      - name: List generated files
+        run: |
+          echo "Generated files:"
+          ls -la
+          echo -e "\nAssets directory structure:"
+          find assets -type f | sort
+
+      - name: Commit and push updated files
         run: |
           git config --local user.email "github-actions[bot]@users.noreply.github.com"
           git config --local user.name "github-actions[bot]"
           git add index.html
+          git add assets/
           git diff --staged --quiet || git commit -m "Update withdrawal analysis report [automated]" -m "Daily update triggered by GitHub Actions"
           git push https://${{ github.actor }}:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.git HEAD:${{ github.ref }}
           
-      # This step explicitly triggers the GitHub Pages build and deployment
-      - name: Trigger GitHub Pages build
-        run: |
-          curl -X POST \
-            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
-            -H "Accept: application/vnd.github.v3+json" \
-            https://api.github.com/repos/${{ github.repository }}/pages/builds 
+      # Setup and deploy to GitHub Pages using the official action
+      - name: Setup Pages
+        uses: actions/configure-pages@v3
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v1
+        with:
+          path: '.'
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v2 
