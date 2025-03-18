@@ -73,6 +73,12 @@ jobs:
       # Explicitly include the upload-artifact action that's needed
       - name: Setup upload-artifact
         uses: actions/upload-artifact@v4
+        with:
+          name: workflow-artifacts
+          path: |
+            index.html
+            assets/**
+          retention-days: 1
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v2
