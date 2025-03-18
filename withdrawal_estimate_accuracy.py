@@ -1763,25 +1763,24 @@ document.addEventListener('DOMContentLoaded', function() {
         
         # Handle problematic charts differently
         if title in problematic_charts:
-            # For problematic charts, create a JavaScript file with embedded data
-            js_chart_filename = f"assets/data/charts/chart_{title}.js"
-            with open(js_chart_filename, "w") as f:
-                f.write(f'const chartData_{title} = {json.dumps(chart.to_dict(), cls=CustomJSONEncoder)};')
-            
-            # Reference the JavaScript file instead of JSON
+            # For problematic charts, embed the chart data directly in the HTML
+            # This avoids issues with loading external JS files on GitHub Pages
             chart_html = f"""
                 <div class="chart-container">
                     <h2>{chart_title}</h2>
                     <div id="vis{i}" class="vis-container"></div>
-                    <script src="{js_chart_filename}"></script>
                     <script>
-                        document.addEventListener('DOMContentLoaded', function() {{
-                            vegaEmbed('#vis{i}', chartData_{title}, {{
+                        (function() {{
+                            // Directly embed the chart data in the HTML
+                            const chartData = {json.dumps(chart.to_dict(), cls=CustomJSONEncoder)};
+                            
+                            // Render the chart immediately
+                            vegaEmbed('#vis{i}', chartData, {{
                                 mode: "vega-lite",
                                 actions: false,
                                 renderer: "svg"
                             }});
-                        }});
+                        }})();
                     </script>
                 </div>
             """
