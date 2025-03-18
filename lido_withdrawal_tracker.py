@@ -28,7 +28,7 @@ BATCH_SIZE = 20
 MAX_CONCURRENT_BATCHES = 5  # Increased from 2
 TABLE_NAME = "lido_withdrawal_requests"
 REGION_NAME = os.getenv('AWS_REGION', 'us-east-1')  # Use environment variable with fallback
-MAX_REQUEST_ID = 80000  # Upper bound for request IDs
+MAX_REQUEST_ID = 200000  # Upper bound for request IDs
 
 # Initialize AWS clients
 s3_client = boto3.client(
@@ -299,7 +299,7 @@ def store_data_in_dynamodb(data_items, table):
                 
                 # Calculate finalization_time if finalization_at exists
                 finalization_time = None
-                if 'finalization_at' in item:
+                if 'finalization_at' in item and item['finalization_at'] is not None:
                     try:
                         finalization_time = int(datetime.fromisoformat(item['finalization_at'].replace('Z', '+00:00')).timestamp())
                     except (ValueError, TypeError):
