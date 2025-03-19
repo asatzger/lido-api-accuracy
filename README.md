@@ -18,14 +18,16 @@ This project tracks Lido unstETH withdrawal requests by querying the Lido API ev
 3. It generates visualizations and statistics
 4. The analysis is published to GitHub Pages
 
-### Important Note About Request IDs
+### Tracking Withdrawal Finalization
 
-Currently, the API does not provide a way to identify non-existent withdrawal request IDs (see [issue #269](https://github.com/lidofinance/withdrawals-api/issues/269)). As a workaround, you need to manually set an upper bound for request IDs in the code. This can be done by:
+The system identifies and tracks withdrawal finalization through:
 
-1. Checking the latest withdrawal request ID (e.g., using [this Dune query](https://dune.com/queries/4832920))
-2. Setting `MAX_REQUEST_ID` in `lido_withdrawal_tracker.py` to a value slightly above the latest known ID
+1. **Status Monitoring**: The script queries the Lido API for each withdrawal request ID and tracks its status over time
+2. **Finalized Detection**: A withdrawal is considered finalized when the API returns status "finalized"
+3. **Timestamp Capture**: When a withdrawal transitions to finalized status, the system records the timestamp
+4. **Accuracy Analysis**: Actual finalization timestamps are compared against previously estimated finalization times to calculate accuracy metrics
 
-Current `MAX_REQUEST_ID` is set to 200000.
+The tracker uses `MAX_REQUEST_ID` (currently set to 200000) as an upper bound for withdrawal IDs to query. This value should be periodically increased to keep up with new withdrawal requests.
 
 ## Setup Instructions
 
