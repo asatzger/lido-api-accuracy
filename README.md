@@ -123,4 +123,4 @@ Key metrics include:
 - Cumulative accuracy by days difference
 - Daily processing patterns
 
-You can view the analysis results at: `https://<your-github-username>.github.io/<repository-name>/`
+You can view the analysis results at: `https://asatzger.github.io/lido-api-accuracy/`
